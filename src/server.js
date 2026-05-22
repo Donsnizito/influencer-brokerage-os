@@ -13,6 +13,7 @@ import { getParentNiche, getChildNiches, getParentLabel } from './utils/niches.j
 import multer from 'multer';
 import { verifyInboundSignature } from './utils/sendgrid_signature.js';
 import { processInboundEmail } from './skills/negotiation_handler.js';
+import { Readable } from 'stream';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -104,7 +105,7 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
         }
 
         // Parse multipart form data using multer
-        const fakeReq = Object.assign(new (require('stream').Readable)(), {
+        const fakeReq = Object.assign(new Readable(), {
             headers: req.headers,
             _read: () => {}
         });
