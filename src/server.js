@@ -10,6 +10,9 @@ import { dealsTable, influencersTable, brandsTable, fetchRecords, updateRecord, 
 import { logActivity } from './utils/logger.js';
 import { getTrackingInfo, updateTrackingInfo } from './utils/tracker.js';
 import { getParentNiche, getChildNiches, getParentLabel } from './utils/niches.js';
+import multer from 'multer';
+import { verifyInboundSignature } from './utils/sendgrid_signature.js';
+import { processInboundEmail } from './skills/negotiation_handler.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -19,6 +22,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const upload = multer();
 
 // ------------------------------------------------------------------
 // Static Dashboard (served BEFORE express.json() to protect raw body)
@@ -83,6 +87,80 @@ app.post('/webhooks/pandadoc', express.json(), async (req, res) => {
     }
 
     res.json({ received: true });
+});
+
+// ------------------------------------------------------------------
+// SendGrid Inbound Webhook
+// ------------------------------------------------------------------
+app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+    try {
+        const sig = req.headers['x-twilio-email-event-webhook-signature'];
+        const ts = req.headers['x-twilio-email-event-webhook-timestamp'];
+        const pubKey = process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
+
+        if (!verifyInboundSignature(req.body, sig, ts, pubKey)) {
+            console.warn('❌ SendGrid inbound signature failed');
+            return res.status(401).send('Invalid signature');
+        }
+
+        // Parse multipart form data using multer
+        const fakeReq = Object.assign(new (require('stream').Readable)(), {
+            headers: req.headers,
+            _read: () => {}
+        });
+        fakeReq.push(req.body);
+        fakeReq.push(null);
+
+        await new Promise((resolve, reject) => {
+            upload.none()(fakeReq, res, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        const fields = fakeReq.body || {};
+        const fromField = fields.from || '';
+        const emailMatch = fromField.match(/<([^>]+)>/);
+        const senderEmail = emailMatch ? emailMatch[1].trim() : fromField.trim();
+
+        if (!senderEmail) {
+            return res.status(200).send();
+        }
+
+        const emailText = fields.text || '';
+        let textContent = emailText;
+        if (!textContent && fields.html) {
+            // Strip HTML to plaintext if text is empty
+            textContent = fields.html.replace(/<[^>]*>?/gm, '');
+        }
+
+        if (!textContent) {
+            console.warn('Malformed inbound email (no text or html content)');
+            logActivity('inbound_orphan', 'unknown', 'MALFORMED_EMAIL', 'NONE', 'NONE');
+            return res.status(200).send();
+        }
+
+        // Identify sender
+        const influencers = await fetchRecords(influencersTable, `{email} = '${senderEmail}'`);
+        const brands = await fetchRecords(brandsTable, `{contact_email} = '${senderEmail}'`);
+
+        if (influencers.length > 0 && brands.length > 0) {
+            console.warn(`Email ${senderEmail} matches both influencer and brand. Treating as influencer.`);
+            await processInboundEmail(influencers[0], textContent, 'influencer');
+        } else if (influencers.length > 0) {
+            await processInboundEmail(influencers[0], textContent, 'influencer');
+        } else if (brands.length > 0) {
+            await processInboundEmail(brands[0], textContent, 'brand');
+        } else {
+            logActivity('inbound_orphan', 'unknown', 'INBOUND_ORPHAN', 'NONE', 'NONE');
+        }
+
+        return res.status(200).send();
+    } catch (err) {
+        console.error('Inbound Email Error:', err.message);
+        // Always return 200 to SendGrid
+        return res.status(200).send();
+    }
 });
 
 // ------------------------------------------------------------------
@@ -173,7 +251,7 @@ app.get('/roster', async (req, res) => {
     const expiryDate = brand.roster_token_expires ? new Date(brand.roster_token_expires).toLocaleDateString() : 'TBD';
 
     let html = fs.readFileSync(path.resolve(__dirname, 'views', 'roster.html'), 'utf8');
-    html = html.replace(/{{BRAND_NAME}}/g, brand.name || 'your brand')
+    html = html.replace(/{{BRAND_NAME}}/g, brand.company_name || 'your brand')
                .replace(/{{EXPIRY_DATE}}/g, expiryDate)
                .replace(/{{CREATOR_CARDS}}/g, cardsHtml)
                .replace(/{{TOKEN}}/g, token)
@@ -278,7 +356,7 @@ app.get('/api/deals', async (req, res) => {
             return {
                 ...deal,
                 influencer_name: inf.name || 'Unknown Influencer',
-                brand_name: br.name || 'Unknown Brand',
+                brand_name: br.company_name || 'Unknown Brand',
                 niche: inf.niche || br.niche || 'lifestyle',
                 broker_fee: deal.agreed_rate ? Math.round(deal.agreed_rate * 0.15) : null,
                 escalation_flag: tracking.escalation_flag || null
@@ -306,7 +384,7 @@ app.get('/api/deals', async (req, res) => {
                 status: br.status || 'BRAND_COLD',
                 niche: br.niche || 'lifestyle',
                 influencer_name: null,
-                brand_name: br.name || 'Unknown Brand',
+                brand_name: br.company_name || 'Unknown Brand',
                 agreed_rate: null,
                 broker_fee: null,
                 escalation_flag: tracking.escalation_flag || null

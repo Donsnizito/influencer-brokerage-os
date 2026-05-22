@@ -68,8 +68,8 @@ export async function runBrandOutreach() {
         const combinedFollowers = infs.reduce((sum, inf) => sum + (inf.subscriber_count || 0), 0);
         
         // Ensure cluster meets criteria to protect pitch credibility
-        if (infs.length < 5) {
-            console.log(`Skipping niche ${niche}: Only ${infs.length} creators (need 5+)`);
+        if (infs.length < 1) {
+            console.log(`Skipping niche ${niche}: No quoted creators available`);
             continue;
         }
         const avgEngagement = infs.reduce((sum, inf) => sum + (inf.engagement_rate || 0), 0) / infs.length;
@@ -87,12 +87,12 @@ export async function runBrandOutreach() {
             const nicheLabel = getLabel(niche);
             const subject = subjectRaw
                 .replace(/{niche}/g, nicheLabel)
-                .replace(/{company_name}/g, brand.name);
+                .replace(/{company_name}/g, brand.company_name);
 
             const body = bodyRaw
                 .replace(/{contact_name}/g, brand.contact_name || 'there')
                 .replace(/{niche}/g, nicheLabel)
-                .replace(/{company_name}/g, brand.name)
+                .replace(/{company_name}/g, brand.company_name)
                 .replace(/{combined_followers}/g, combinedFollowers.toLocaleString())
                 .replace(/{avg_engagement}/g, (avgEngagement * 100).toFixed(2))
                 .replace(/{adjacent_verticals}/g, "related spaces")
@@ -118,11 +118,11 @@ export async function runBrandOutreach() {
                 });
 
                 logActivity('brand_outreach', brand.id, 'PITCH_SENT', 'BRAND_COLD', 'BRAND_PITCHED');
-                console.log(`Pitched brand ${brand.name} for niche ${nicheLabel}`);
+                console.log(`Pitched brand ${brand.company_name} for niche ${nicheLabel}`);
                 
                 await new Promise(r => setTimeout(r, 2000));
             } catch (err) {
-                logError(Tiers.HIGH, 'brand_outreach', `Failed to send pitch to ${brand.name}`, { error: err.message });
+                logError(Tiers.HIGH, 'brand_outreach', `Failed to send pitch to ${brand.company_name}`, { error: err.message });
             }
         }
     }

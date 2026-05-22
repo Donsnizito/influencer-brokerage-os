@@ -73,8 +73,11 @@ export async function runMicroDaemon() {
 
         for (const user of users) {
             const email = extractEmail(user.description);
-            if (!email) {
-                // Must have high confidence email
+            if (!email || email === 'MANUAL_NEEDED') {
+                const logMsg = `[${new Date().toISOString()}] Rejected: missing_or_invalid_email | Raw: "X_DESCRIPTION" | Source: ${user.username || 'UNKNOWN'}\n`;
+                const logsDir = path.resolve(process.cwd(), 'data/logs');
+                if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+                fs.appendFileSync(path.join(logsDir, 'ingest_rejections.log'), logMsg);
                 continue;
             }
 

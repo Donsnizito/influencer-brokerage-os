@@ -69,7 +69,12 @@ async function ingestType(ingestDir, table, initialStatus, isInfluencer) {
                 email = row.contact_email;
             }
             
-            if (!isValidEmail(email)) {
+            if (!isValidEmail(email) || email === 'MANUAL_NEEDED') {
+                const logMsg = `[${new Date().toISOString()}] Rejected: missing_or_invalid_email | Raw: "${email}" | Source: ${email || 'UNKNOWN'}\n`;
+                const logsDir = path.resolve(process.cwd(), 'data/logs');
+                if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+                fs.appendFileSync(path.join(logsDir, 'ingest_rejections.log'), logMsg);
+                
                 logError(Tiers.MEDIUM, 'ingest_sprint', `Skipped record with missing/invalid email: ${email || 'UNKNOWN'}`);
                 skipCount++;
                 continue;
@@ -133,7 +138,7 @@ async function ingestType(ingestDir, table, initialStatus, isInfluencer) {
                 avg_views: engagement,
                 status: initialStatus
             } : {
-                name: name,
+                company_name: name,
                 contact_email: email,
                 niche: strictNicheId,
                 status: initialStatus

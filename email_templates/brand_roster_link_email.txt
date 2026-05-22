@@ -1,0 +1,16 @@
+SUBJECT: Your roster — creators ready to work with {company_name}
+
+Hi {contact_name},
+
+Thanks for the interest. Based on what you mentioned, I've pulled a personalized roster of creators in your space who are ready to work with {company_name} right now — with pricing and deliverables locked in.
+
+Take a look here: {roster_url}
+
+This link is personal to you and expires in 14 days. Each creator card shows audience stats, deliverable options, and the all-in rate.
+
+Pick the ones that fit your campaign and check the boxes to move forward. I'll handle the contract and timeline coordination from there.
+
+Any questions, just reply to this email.
+
+— {owner_name}
+{agency_name}
