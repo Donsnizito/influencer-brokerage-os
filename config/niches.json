@@ -1,0 +1,26 @@
+{
+  "tech_software": {
+    "label": "Tech & Software",
+    "children": ["ai_tech", "ai_saas", "productivity", "ecommerce"]
+  },
+  "lifestyle_personal": {
+    "label": "Lifestyle & Personal",
+    "children": ["lifestyle", "self_development", "travel", "home_decor", "home_garden_wedding"]
+  },
+  "content_media": {
+    "label": "Content & Media",
+    "children": ["content_creation", "podcasts", "books"]
+  },
+  "family_home": {
+    "label": "Family & Home",
+    "children": ["pets", "baby_kids", "diy"]
+  },
+  "education_knowledge": {
+    "label": "Education & Knowledge",
+    "children": ["education", "teaching"]
+  },
+  "physical_goods": {
+    "label": "Physical Goods",
+    "children": ["physical_products", "automotive"]
+  }
+}

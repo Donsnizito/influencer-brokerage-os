@@ -1,0 +1,32 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+
+# Logs
+data/logs/
+*.log
+npm-debug.log*
+
+# Local data
+data/ingest/influencers/*.csv
+data/ingest/brands/*.csv
+data/archive/
+data/raw/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Antigravity artifacts
+.gemini/
+walkthrough.md
+task.md

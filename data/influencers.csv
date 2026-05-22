@@ -1,0 +1,4 @@
+influencer_id,name,channel_url,email,niche,subscriber_count,avg_views,engagement_rate,status,quoted_rate,notes,last_contacted,follow_up_count,dinner_table_score
+1,TechReviewer Pro,https://youtube.com/techreviewerpro,,ai_tech,550000,120000,0.045,INFLUENCER_DISCOVERED,,,,0,4
+2,Minimalist Mom,https://youtube.com/minimalistmom,,baby_kids,120000,65000,0.038,INFLUENCER_DISCOVERED,,,,0,5
+3,Woodworking Wizard,https://youtube.com/woodwizard,,diy,890000,250000,0.052,INFLUENCER_DISCOVERED,,,,0,3

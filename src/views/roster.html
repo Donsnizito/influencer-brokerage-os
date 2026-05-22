@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Curated Creator Roster</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: #1e293b;
+            --primary: #3b82f6;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --danger: #ef4444;
+            --success: #10b981;
+        }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            margin-bottom: 40px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 2.5rem; }
+        .deadline {
+            color: #fbbf24;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        .creator-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .creator-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+        .creator-info {
+            flex-grow: 1;
+        }
+        .creator-name {
+            font-size: 1.5rem;
+            margin: 0 0 8px 0;
+            font-weight: 700;
+        }
+        .stats {
+            display: flex;
+            gap: 20px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            font-size: 0.95rem;
+        }
+        .terms {
+            background: rgba(0,0,0,0.2);
+            padding: 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: #cbd5e1;
+        }
+        .terms p { margin: 4px 0; }
+        .price {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--success);
+            margin-top: 10px;
+        }
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        input[type="checkbox"] {
+            width: 24px;
+            height: 24px;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+        .actions {
+            margin-top: 40px;
+            display: flex;
+            gap: 20px;
+            justify-content: flex-end;
+            align-items: center;
+            border-top: 1px solid var(--border);
+            padding-top: 30px;
+        }
+        button {
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        .btn-approve {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-decline {
+            background: transparent;
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Your Curated Roster</h1>
+            <p>We've secured specialized quotes from the following top-tier creators tailored exactly for <strong>{{BRAND_NAME}}</strong>.</p>
+            <div class="deadline">⏳ Rates & availability locked through: {{EXPIRY_DATE}}</div>
+            {{MATCH_HINT}}
+        </header>
+
+        <form id="rosterForm">
+            {{CREATOR_CARDS}}
+
+            <div class="actions">
+                <button type="button" class="btn-decline" onclick="handleDecline()">Not the right fit this round</button>
+                <button type="submit" class="btn-approve">Approve Selection</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        const token = "{{TOKEN}}";
+
+        document.getElementById('rosterForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const selected = Array.from(document.querySelectorAll('input[name="selected_creators"]:checked')).map(cb => cb.value);
+            
+            if (selected.length === 0) {
+                alert('Please select at least one creator, or click "Not the right fit".');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/roster/select', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, selected })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Selection approved! We will draft the contracts immediately.');
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                alert('Connection error.');
+            }
+        });
+
+        async function handleDecline() {
+            if (!confirm('Are you sure? This will release these creators back to other brands.')) return;
+            try {
+                const res = await fetch('/api/roster/decline', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Thanks for letting us know! We will stop following up on this roster.');
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            } catch (err) {
+                alert('Connection error.');
+            }
+        }
+    </script>
+</body>
+</html>

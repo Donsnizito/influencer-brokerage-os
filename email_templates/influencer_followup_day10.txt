@@ -1,0 +1,11 @@
+SUBJECT: Final note — {first_name}
+
+Hi {first_name}, 
+
+I'll keep this brief. If now isn't the right time for brand partnerships, I completely understand and won't bother you again. 
+
+If you are open to it down the line, I'd love to reconnect. Keep up the great work on the channel!
+
+Best,
+{owner_name}
+{agency_name}

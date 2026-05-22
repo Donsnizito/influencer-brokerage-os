@@ -1,0 +1,17 @@
+[INFLUENCER AGREEMENT PLACEHOLDER]
+This file must be replaced by a lawyer-approved contract template (.docx) formatted for PandaDoc variable substitution.
+
+Required Variables to include in your .docx:
+{{brand_company_name}}
+{{influencer_name}}
+{{influencer_channel_url}}
+{{influencer_email}}
+{{agreed_rate}}
+{{deliverables_description}}
+{{post_deadline}}
+{{exclusivity_clause}}
+{{usage_rights}}
+{{revision_limit}}
+{{broker_name}}
+{{broker_fee}}
+{{contract_date}}

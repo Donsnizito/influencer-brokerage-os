@@ -1,0 +1,29 @@
+{
+  "name": "ai-influencer-agency",
+  "version": "1.0.0",
+  "description": "AI-powered Influencer Marketing Brokerage",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "scout": "node src/skills/influencer_scout.js",
+    "scout:brand": "node src/skills/brand_scout.js",
+    "outreach:influencer": "node src/skills/influencer_outreach.js",
+    "outreach:brand": "node src/skills/brand_outreach.js",
+    "followup": "node src/skills/follow_up_engine.js",
+    "tracker": "node src/skills/campaign_tracker.js"
+  },
+  "dependencies": {
+    "airtable": "^0.12.2",
+    "axios": "^1.6.8",
+    "csv-parser": "^3.2.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^134.0.0",
+    "nodemailer": "^6.9.13",
+    "stripe": "^15.0.0"
+  }
+}

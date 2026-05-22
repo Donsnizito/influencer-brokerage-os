@@ -1,0 +1,4 @@
+brand_id,company_name,contact_name,contact_email,niche,status,budget_range,last_contacted,follow_up_count,notes
+1,Surfshark,Dovydas,,travel,BRAND_INTERESTED,"$5,000 - $10,000",,,Looking for travel/tech creators
+2,Notion,Sarah,,productivity,BRAND_COLD,"$10,000+",,,Prefers exclusivity
+3,BetterHelp,Mike,,self_development,BRAND_COLD,"$2,000 - $5,000",,,Needs podcast integrations

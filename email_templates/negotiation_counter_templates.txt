@@ -1,0 +1,20 @@
+--- COUNTER: TOO EXPENSIVE (INFLUENCER) ---
+Hi {brand_contact},
+
+I understand budget constraints. If we drop the {deliverable_to_drop} (e.g., IG Story set) but keep the main 60-90s integration, we can bring the total down to {new_price}, which feels closer to your target. 
+
+Would that structure work for your team?
+
+--- COUNTER: ADD SHORTS (INFLUENCER) ---
+Hi {brand_contact},
+
+We can definitely add a dedicated YouTube Short cut from the main video. To accommodate the extra editing and deliverable, we'd adjust the total package to {new_price}. 
+
+Let me know if you'd like me to draft that up in the agreement!
+
+--- COUNTER: AUDIENCE CONCERNS (BRAND) ---
+Hi {brand_contact},
+
+Totally fair question. Looking at our recent analytics, {influencer_name}'s audience has a strong {percentage}% overlap with the {demographic_target} demographic. We ran a similar campaign in the {adjacent_niche} space last month and saw a {engagement_rate}% engagement rate. 
+
+I'm happy to share the full media kit if that helps contextualize it further.

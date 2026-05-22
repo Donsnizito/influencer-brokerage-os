@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Influencer Agency — Broker Dashboard</title>
+    <meta name="description" content="Private broker dashboard for managing influencer marketing deals, payments, negotiations, and live campaigns.">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="app-container">
+
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="brand">
+                <div class="logo">AI</div>
+                <h1>Brokerage</h1>
+            </div>
+
+            <div class="nav-menu">
+                <a href="#pipeline" class="nav-item active" data-view="pipeline">
+                    <span class="icon">📊</span><span>Pipeline</span>
+                </a>
+                <a href="#escalations" class="nav-item" data-view="escalations">
+                    <span class="icon">⚠️</span>
+                    <span>Escalations <span class="badge" id="escalation-count">0</span></span>
+                </a>
+                <a href="#payments" class="nav-item" data-view="payments">
+                    <span class="icon">💸</span>
+                    <span>Payment Queue <span class="badge" id="payment-count">0</span></span>
+                </a>
+                <a href="#tracker" class="nav-item" data-view="tracker">
+                    <span class="icon">👁️</span><span>Campaign Tracker</span>
+                </a>
+            </div>
+
+            <div class="nav-bottom">
+                <div class="user-profile">
+                    <div class="avatar">OM</div>
+                    <div class="user-info">
+                        <span class="name">Owner Mode</span>
+                        <span class="role">Admin</span>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main -->
+        <main class="main-content">
+            <header class="topbar">
+                <h2 id="current-view-title">Deal Pipeline</h2>
+                <div class="revenue-widget">
+                    <div class="stat-box">
+                        <span class="label">Monthly Rev (Fees)</span>
+                        <span class="value success" id="monthly-rev">$0</span>
+                        <span class="target-progress">0% of $10K Goal</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="label">Active Deals</span>
+                        <span class="value" id="active-deals">0</span>
+                    </div>
+                </div>
+            </header>
+
+            <div class="view-container">
+
+                <!-- Pipeline View -->
+                <section id="view-pipeline" class="view active">
+                    <div class="kanban-board">
+                        <div class="kanban-column">
+                            <div class="column-header">
+                                <h3>Discovery & Outreach</h3>
+                                <span class="count" id="count-discovery">0</span>
+                            </div>
+                            <div class="column-body" id="col-discovery"></div>
+                        </div>
+                        <div class="kanban-column">
+                            <div class="column-header">
+                                <h3>Negotiation</h3>
+                                <span class="count" id="count-negotiation">0</span>
+                            </div>
+                            <div class="column-body" id="col-negotiation"></div>
+                        </div>
+                        <div class="kanban-column">
+                            <div class="column-header">
+                                <h3>Contracts & Payment</h3>
+                                <span class="count" id="count-contracts">0</span>
+                            </div>
+                            <div class="column-body" id="col-contracts"></div>
+                        </div>
+                        <div class="kanban-column">
+                            <div class="column-header">
+                                <h3>Live Campaigns</h3>
+                                <span class="count" id="count-live">0</span>
+                            </div>
+                            <div class="column-body" id="col-live"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Escalations View -->
+                <section id="view-escalations" class="view hidden">
+                    <div class="list-layout">
+                        <div class="list-header">
+                            <h3>Items Requiring Attention</h3>
+                            <p class="subtitle">RED = Hard Stop. YELLOW = Awaiting your approval before agent responds.</p>
+                        </div>
+                        <div id="escalations-list"></div>
+                    </div>
+                </section>
+
+                <!-- Payment Queue View -->
+                <section id="view-payments" class="view hidden">
+                    <div class="list-layout">
+                        <div class="list-header">
+                            <h3>Ready for Payout Release</h3>
+                            <p class="subtitle">Stripe has collected funds. Manually release the influencer payout via <code>release_payout(deal_id)</code>.</p>
+                        </div>
+                        <div id="payment-list"></div>
+                    </div>
+                </section>
+
+                <!-- Campaign Tracker View -->
+                <section id="view-tracker" class="view hidden">
+                    <div class="list-layout">
+                        <div class="list-header">
+                            <h3>Live Campaign View Tracker</h3>
+                            <p class="subtitle">View counts update every 24 hours via YouTube Data API.</p>
+                        </div>
+                        <div id="tracker-list" class="tracker-grid"></div>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

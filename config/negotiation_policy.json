@@ -1,0 +1,107 @@
+{
+  "influencer_side": {
+    "autonomy_level": "70-80%",
+    "auto_negotiate_if": {
+      "price_change_percent_max": 10,
+      "no_exclusivity": true,
+      "no_legal_edits": true,
+      "no_paid_media_rights": true,
+      "minimum_margin_percent": 15
+    }
+  },
+  "brand_side": {
+    "autonomy_level": "30-50%",
+    "auto_negotiate_if": {
+      "price_change_percent_max": 5,
+      "no_scope_changes": true,
+      "no_contract_edits": true,
+      "no_rights_changes": true,
+      "minimum_margin_percent": 15
+    }
+  },
+  "classification": {
+    "GREEN": [
+      "Answer FAQs",
+      "Clarify deliverables",
+      "Schedule calls",
+      "Send media kits",
+      "Confirm timelines",
+      "Minor price adjustments within 10% band",
+      "Basic negotiation inside approved rate ranges",
+      "Request for posting schedule",
+      "Confirming brand guidelines receipt",
+      "Asking for product shipment address"
+    ],
+    "YELLOW": [
+      "Price variance 10-20%",
+      "Added deliverables (e.g. extra Shorts, IG stories)",
+      "Deadline shifts greater than 7 days",
+      "Unusual or non-standard asks",
+      "Partial exclusivity requests",
+      "Revised posting dates",
+      "Bundle or package requests",
+      "Request for revision beyond agreed limit",
+      "Ask for performance guarantee modification"
+    ],
+    "RED": [
+      "Price outside floor/ceiling thresholds",
+      "Any exclusivity clause (especially 60-90 day)",
+      "Usage rights: paid ads, whitelisting, perpetual, repurposing",
+      "Any legal edits to contract — FLAG_LEGAL_CHANGE",
+      "Refund or liability language",
+      "Brand requesting content approval rights",
+      "Kill fees or penalty clauses",
+      "Requests to change governing law or jurisdiction",
+      "Requests to remove broker from contract",
+      "Demands for influencer personal information beyond what is in contract"
+    ]
+  },
+  "objection_playbook": {
+    "too_expensive": {
+      "classification": "GREEN",
+      "if_within_10_percent": "Counter with same deliverables at slightly lower rate or propose removing one deliverable to hit their number",
+      "response_hint": "Propose reducing one deliverable (e.g. drop IG stories) to meet their budget without dropping the video rate"
+    },
+    "exclusivity_requested": {
+      "classification": "RED",
+      "action": "Hard stop. Escalate to owner immediately. Never auto-accept. If owner approves, exclusivity carries a mandatory premium of 25% on top of agreed rate."
+    },
+    "audience_mismatch": {
+      "classification": "GREEN",
+      "response_hint": "Send engagement data and niche overlap analysis. Reference past campaign performance in adjacent niches."
+    },
+    "add_shorts_or_stories": {
+      "classification": "YELLOW",
+      "response_hint": "Draft counter with adjusted pricing. Shorts: +$200-500. IG stories (3x15sec): +$300-800. Flag for owner approval."
+    },
+    "legal_edits": {
+      "classification": "RED",
+      "action": "FLAG_LEGAL_CHANGE. Hard stop. Never respond or accept. Notify owner immediately with exact clause quoted."
+    },
+    "usage_rights_ads": {
+      "classification": "RED",
+      "action": "Hard stop. Escalate RED. Usage rights for paid media require a separate licensing fee negotiated by owner."
+    },
+    "late_payment": {
+      "classification": "YELLOW",
+      "response_hint": "Confirm Stripe invoice was received. Resend link. If 7+ days late, escalate to owner."
+    },
+    "wants_more_revisions": {
+      "classification": "YELLOW",
+      "response_hint": "Politely note the revision limit in contract. If they want to exceed, draft an addendum with a revision fee."
+    }
+  },
+  "per_deal_fields": [
+    "target_price",
+    "walkaway_price",
+    "minimum_margin",
+    "deliverables",
+    "exclusivity_allowed",
+    "usage_rights_allowed",
+    "revision_limit",
+    "timeline_limit",
+    "view_guarantee"
+  ],
+  "auto_accept_logic": "IF counter_price >= walkaway_price: RED. IF counter_price between target and walkaway AND no RED flags: GREEN, can auto-accept. IF price_change > 10%: YELLOW.",
+  "stale_deal_escalation_days": 5
+}
