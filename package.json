@@ -2,7 +2,7 @@
   "name": "ai-influencer-agency",
   "version": "1.0.0",
   "description": "AI-powered Influencer Marketing Brokerage",
-  "main": "src/index.js",
+  "main": "src/server.js",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
