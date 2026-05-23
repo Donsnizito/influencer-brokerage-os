@@ -17,6 +17,8 @@ import multer from 'multer';
 import { verifyInboundSignature } from './utils/sendgrid_signature.js';
 import { processInboundEmail } from './skills/negotiation_handler.js';
 import { Readable } from 'stream';
+import { pandaDocClient } from './utils/pandadoc_client.js';
+import { logError, Tiers } from './utils/errorHandler.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -143,48 +145,86 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
     });
 
     try {
-        let shouldCreateInvoice = false;
-        if (event === 'document_state_changed' && data?.status === 'document.completed') {
+        if (event === 'document_state_changed') {
+            const docStatus = data?.status;
             const docId = data?.id;
-            if (docId) {
-                const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
-                if (deals.length > 0) {
-                    const deal = deals[0];
-                    await updateRecord(dealsTable, deal.id, {
-                        status: 'CONTRACT_SIGNED',
-                        contract_signed_date: new Date().toISOString().split('T')[0]
-                    });
-                    logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
-                    console.log(`✅ Contract signed for Deal ${deal.id}`);
-                    await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
-                    shouldCreateInvoice = true;
-                } else {
-                    await markProcessed(eventRecord, 'No deal found for docId');
-                }
-            } else {
-                await markProcessed(eventRecord, 'No docId in payload');
+            if (!docId) {
+                await markProcessed(eventRecord, 'No doc ID in payload');
+                return res.json({ received: true });
             }
+            
+            const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
+            if (deals.length === 0) {
+                await markProcessed(eventRecord, `No deal found for doc ${docId}`);
+                return res.json({ received: true });
+            }
+            const deal = deals[0];
+            
+            if (docStatus === 'document.completed') {
+                await updateRecord(dealsTable, deal.id, {
+                    status: 'CONTRACT_SIGNED',
+                    contract_signed_date: new Date().toISOString().split('T')[0]
+                });
+                logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
+                await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
+                res.json({ received: true });
+                setImmediate(async () => {
+                    try {
+                        await createInvoices();
+                    } catch (err) {
+                        logError(Tiers.HIGH, 'background_invoice', 'Invoice creation failed', { error: err.message });
+                    }
+                });
+                return;
+            }
+            
+            if (docStatus === 'document.draft') {
+                if (deal.contract_state !== 'DRAFTING') {
+                    await markProcessed(eventRecord, `Deal ${deal.id} not in DRAFTING state (was ${deal.contract_state})`);
+                    return res.json({ received: true });
+                }
+                
+                try {
+                    await pandaDocClient.post(`/documents/${docId}/send`, { silent: false });
+                    logActivity('contract_generator', deal.id, 'DRAFT_SENT', 'DRAFTING', 'SENT');
+                    
+                    const allDocIds = deal.pandadoc_doc_id.split(',').map(s => s.trim());
+                    const sentDocs = (deal.contract_docs_sent || '').split(',').filter(s => s);
+                    sentDocs.push(docId);
+                    const allSent = allDocIds.every(id => sentDocs.includes(id));
+                    
+                    if (allSent) {
+                        await updateRecord(dealsTable, deal.id, {
+                            contract_state: 'SENT',
+                            contract_docs_sent: sentDocs.join(','),
+                            status: 'CONTRACT_SENT',
+                            contract_sent_date: new Date().toISOString().split('T')[0]
+                        });
+                        logActivity('contract_generator', deal.id, 'ALL_CONTRACTS_SENT', 'DRAFTING', 'CONTRACT_SENT');
+                    } else {
+                        await updateRecord(dealsTable, deal.id, {
+                            contract_docs_sent: sentDocs.join(',')
+                        });
+                    }
+                    
+                    await markProcessed(eventRecord, `Doc ${docId} sent for Deal ${deal.id}`);
+                } catch (err) {
+                    await markFailed(eventRecord, `Send failed for doc ${docId}: ${err.message}`);
+                    logError(Tiers.HIGH, 'contract_generator', `Failed to send doc ${docId}`, { error: err.message });
+                }
+                
+                return res.json({ received: true });
+            }
+            
+            await markProcessed(eventRecord, `Unhandled status: ${docStatus}`);
+            return res.json({ received: true });
         } else {
             await markProcessed(eventRecord, `Ignored event: ${event}`);
+            return res.json({ received: true });
         }
-
-        res.json({ received: true });
-
-        if (shouldCreateInvoice) {
-            setImmediate(async () => {
-                try {
-                    await createInvoices();
-                    console.log('Background invoice creation completed');
-                } catch (err) {
-                    console.error('Invoice creation failed after contract signed:', err.message);
-                }
-            });
-        }
-        return;
     } catch (error) {
         await markFailed(eventRecord, error.message);
-        res.json({ received: true });
-        return;
+        return res.json({ received: true });
     }
 });
 
@@ -539,8 +579,40 @@ app.post('/api/release_payout', async (req, res) => {
     if (!deal_id) return res.status(400).json({ error: 'deal_id is required' });
 
     try {
-        await releasePayout(deal_id);
-        res.json({ success: true, message: `Payout released for deal ${deal_id}` });
+        const result = await releasePayout(deal_id);
+        res.json({ success: true, message: `Payout flagged for deal ${deal_id}`, data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// POST: Operator confirms manual payout is complete
+app.post('/api/confirm_payout_complete', async (req, res) => {
+    const { deal_id } = req.body;
+    if (!deal_id) return res.status(400).json({ error: 'deal_id is required' });
+    
+    try {
+        const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${deal_id}'`);
+        if (!deals.length) return res.status(404).json({ error: 'Deal not found' });
+        const deal = deals[0];
+        
+        if (deal.payout_status !== 'PAYOUT_OWED') {
+            return res.status(400).json({ error: `Deal payout_status is ${deal.payout_status}, expected PAYOUT_OWED` });
+        }
+        
+        await updateRecord(dealsTable, deal.id, {
+            status: 'PAYMENT_RELEASED',
+            payout_status: 'PAYOUT_COMPLETE',
+            payment_released_date: new Date().toISOString().split('T')[0]
+        });
+        
+        // Optional: auto-transition to CAMPAIGN_LIVE
+        await updateRecord(dealsTable, deal.id, {
+            status: 'CAMPAIGN_LIVE'
+        });
+        
+        logActivity('payment_handler', deal.id, 'PAYOUT_CONFIRMED_BY_OPERATOR', 'PAYMENT_COLLECTED', 'CAMPAIGN_LIVE');
+        res.json({ success: true, message: `Payout confirmed and Deal ${deal_id} marked CAMPAIGN_LIVE` });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

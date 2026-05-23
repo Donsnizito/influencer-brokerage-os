@@ -1,9 +1,10 @@
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
 import path from 'path';
-import { dealsTable, fetchRecords, updateRecord } from '../utils/airtable.js';
+import { dealsTable, brandsTable, influencersTable, fetchRecords, updateRecord } from '../utils/airtable.js';
 import { logActivity } from '../utils/logger.js';
-
+import { logError, Tiers } from '../utils/errorHandler.js';
+import nodemailer from 'nodemailer';
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -22,10 +23,22 @@ export async function createInvoices() {
         console.log(`Creating invoice for Deal: ${deal.id}`);
 
         try {
-            // In a real app, you'd look up the Stripe Customer ID or create a new one based on the brand's email
-            // For now, we simulate with a dummy customer creation
+            const brandId = Array.isArray(deal.brand_id) ? deal.brand_id[0] : deal.brand_id;
+            const brands = await fetchRecords(brandsTable, `RECORD_ID() = '${brandId}'`);
+            if (brands.length === 0) {
+                logError(Tiers.HIGH, 'payment_handler', `Brand not found for Deal ${deal.id}`, { brand_id: brandId });
+                continue;
+            }
+            const brand = brands[0];
+
+            if (!brand.contact_email || !brand.contact_email.includes('@')) {
+                logError(Tiers.HIGH, 'payment_handler', `Invalid brand email for Deal ${deal.id}`, { email: brand.contact_email });
+                continue;
+            }
+
             const customer = await stripe.customers.create({
-                email: "brand_contact@placeholder.com", // Fetch from linked brand record
+                email: brand.contact_email,
+                name: brand.company_name || undefined,
                 description: `Brand for Deal ${deal.id}`
             });
 
@@ -34,7 +47,7 @@ export async function createInvoices() {
                 customer: customer.id,
                 amount: Math.round(deal.agreed_rate * 100), // Stripe expects cents
                 currency: 'usd',
-                description: `Influencer Marketing Campaign — ${deal.deliverables || 'Standard Package'}`
+                description: `Influencer Marketing Campaign — ${deal.deliverables || 'Standard Package'} — ${brand.company_name || 'Brand'}`
             });
 
             // Create and Finalize Invoice
@@ -62,46 +75,120 @@ export async function createInvoices() {
     }
 }
 
+const transporter = process.env.SENDGRID_API_KEY 
+    ? nodemailer.createTransport({
+        host: 'smtp.sendgrid.net',
+        port: 587,
+        auth: { user: 'apikey', pass: process.env.SENDGRID_API_KEY }
+      })
+    : null;
+
+async function sendOperatorPayoutAlert({ dealId, dealRecordId, amount, grossAmount, brokerFee, influencerName, influencerEmail }) {
+    const operatorEmail = process.env.OPERATOR_NOTIFICATION_EMAIL;
+    if (!operatorEmail) {
+        logError(Tiers.HIGH, 'payment_handler', 'OPERATOR_NOTIFICATION_EMAIL not set — payout alert not sent', { dealId });
+        return;
+    }
+    
+    if (!transporter) {
+        logError(Tiers.HIGH, 'payment_handler', 'No email transporter configured — payout alert not sent', { dealId });
+        return;
+    }
+    
+    const fromEmail = process.env.NEOMAIL_USER || process.env.OWNER_EMAIL || 'info@influencer-agency.com';
+    
+    const subject = `💰 PAYOUT OWED: $${amount} → ${influencerName} (Deal ${dealRecordId})`;
+    const body = `
+PAYOUT NOTIFICATION
+===================
+
+A deal has reached PAYMENT_COLLECTED state and the influencer payout needs to be disbursed manually via Mercury.
+
+DEAL DETAILS
+------------
+Deal ID:            ${dealRecordId}
+Airtable Record:    ${dealId}
+Gross Amount:       $${grossAmount}
+Broker Fee (15%):   $${brokerFee}
+PAYOUT TO PAY:      $${amount}
+
+INFLUENCER
+----------
+Name:               ${influencerName}
+Email:              ${influencerEmail}
+
+NEXT STEPS
+----------
+1. Send $${amount} to ${influencerName} via Mercury (or your preferred channel)
+2. Once disbursed, mark the Deal as PAYMENT_RELEASED in the dashboard
+
+This is an automated alert from the brokerage system.
+`;
+
+    try {
+        await transporter.sendMail({
+            from: `"Brokerage Alerts" <${fromEmail}>`,
+            to: operatorEmail,
+            subject,
+            text: body
+        });
+        console.log(`✉️  Operator alert sent to ${operatorEmail} for Deal ${dealId}`);
+    } catch (err) {
+        logError(Tiers.HIGH, 'payment_handler', `Failed to send operator alert for Deal ${dealId}`, { error: err.message });
+    }
+}
+
 // THIS MUST ONLY BE TRIGGERED MANUALLY BY THE DASHBOARD
 export async function releasePayout(dealId) {
-    if (!process.env.STRIPE_SECRET_KEY) throw new Error("Stripe Secret Key not found.");
-
     const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
     if (deals.length === 0) throw new Error("Deal not found.");
     
     const deal = deals[0];
-    if (deal.status !== 'PAYMENT_COLLECTED') throw new Error(`Deal status is ${deal.status}, expected PAYMENT_COLLECTED.`);
-
-    if (!deal.influencer_payout) throw new Error("influencer_payout amount not set on Deal.");
-
-    try {
-        // In reality, this requires the Influencer's connected Stripe Account ID
-        // const transfer = await stripe.transfers.create({
-        //     amount: Math.round(deal.influencer_payout * 100),
-        //     currency: 'usd',
-        //     destination: 'acct_1032D82eZvKYlo2C', // Influencer's connected account ID
-        // });
-
-        console.log(`[SIMULATION] Stripe Transfer created for $${deal.influencer_payout}`);
-
-        await updateRecord(dealsTable, deal.id, {
-            status: 'PAYMENT_RELEASED',
-            payment_released_date: new Date().toISOString().split('T')[0]
-        });
-
-        // Auto transition to live
-        await updateRecord(dealsTable, deal.id, {
-            status: 'CAMPAIGN_LIVE'
-        });
-
-        logActivity('payment_handler', deal.id, 'PAYOUT_RELEASED', 'PAYMENT_COLLECTED', 'CAMPAIGN_LIVE');
-        console.log(`Payout released and Campaign marked live for Deal ${deal.id}`);
-
-        return true;
-    } catch (error) {
-        console.error(`Failed to release payout for Deal ${deal.id}:`, error.message);
-        throw error;
+    if (deal.status !== 'PAYMENT_COLLECTED') {
+        throw new Error(`Deal status is ${deal.status}, expected PAYMENT_COLLECTED.`);
     }
+    
+    // Calculate payout (deal amount minus broker fee)
+    const grossAmount = Number(deal.agreed_rate || 0);
+    if (grossAmount <= 0) throw new Error("agreed_rate not set on Deal.");
+    
+    const brokerFee = Math.round(grossAmount * 0.15);
+    const payoutAmount = grossAmount - brokerFee;
+    
+    // Look up influencer for name and email
+    const infId = Array.isArray(deal.influencer_id) ? deal.influencer_id[0] : deal.influencer_id;
+    const influencers = await fetchRecords(influencersTable, `RECORD_ID() = '${infId}'`);
+    if (influencers.length === 0) throw new Error(`Influencer not found for Deal ${dealId}`);
+    const influencer = influencers[0];
+    
+    // Write operator-facing flag on Deal
+    await updateRecord(dealsTable, deal.id, {
+        payout_status: 'PAYOUT_OWED',
+        payout_amount: payoutAmount,
+        payout_to_influencer_email: influencer.email,
+        payout_to_influencer_name: influencer.name,
+        payout_flagged_date: new Date().toISOString().split('T')[0]
+    });
+    
+    // Send operator alert email
+    await sendOperatorPayoutAlert({
+        dealId: deal.id,
+        dealRecordId: deal.deal_id,
+        amount: payoutAmount,
+        grossAmount,
+        brokerFee,
+        influencerName: influencer.name,
+        influencerEmail: influencer.email,
+    });
+    
+    logActivity('payment_handler', deal.id, 'PAYOUT_FLAGGED_FOR_OPERATOR', 'PAYMENT_COLLECTED', 'PAYMENT_COLLECTED');
+    console.log(`📢 Payout flagged for Deal ${deal.id}: $${payoutAmount} owed to ${influencer.name}`);
+    
+    return { 
+        flagged: true, 
+        amount: payoutAmount, 
+        influencer: influencer.name 
+    };
 }
 
 // Run if called directly
