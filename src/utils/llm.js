@@ -16,7 +16,7 @@ export async function classifyAndExtract({ systemPrompt, userMessage, expectedSc
 
     try {
         const response = await anthropic.messages.create({
-            model: 'claude-3-7-sonnet-20250219',
+            model: 'claude-sonnet-4-6',
             max_tokens: 2048,
             temperature: 0,
             system: systemPrompt,
@@ -51,7 +51,7 @@ export async function chatCompletion({ systemPrompt, userMessage }) {
 
     try {
         const response = await anthropic.messages.create({
-            model: 'claude-3-7-sonnet-20250219',
+            model: 'claude-sonnet-4-6',
             max_tokens: 2048,
             temperature: 0.3,
             system: systemPrompt,
