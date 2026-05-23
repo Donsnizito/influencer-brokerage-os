@@ -430,3 +430,6 @@
 {"timestamp":"2026-05-22T18:49:30.820Z","tier":"MEDIUM","source":"ingest_sprint","message":"Skipped record with missing/invalid email: test4@example.com","context":{}}
 {"timestamp":"2026-05-22T18:49:50.136Z","tier":"MEDIUM","source":"ingest_sprint","message":"Skipped record due to invalid niche: Beauty","context":{"email":"t3@domain3.com"}}
 {"timestamp":"2026-05-22T18:49:50.138Z","tier":"MEDIUM","source":"ingest_sprint","message":"Skipped record due to invalid niche: unknown_niche","context":{"email":"t4@domain4.com"}}
+{"timestamp":"2026-05-23T00:20:46.725Z","tier":"CRITICAL","source":"llm","message":"ANTHROPIC_API_KEY is missing","context":{}}
+{"timestamp":"2026-05-23T00:31:12.053Z","tier":"HIGH","source":"llm","message":"Anthropic API call failed","context":{"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-3-7-sonnet-20250219\"},\"request_id\":\"req_011CbJZJHxy9EJp6jvjkhbGD\"}"}}
+{"timestamp":"2026-05-23T00:33:50.103Z","tier":"HIGH","source":"llm","message":"Anthropic API call failed","context":{"error":"404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-3-7-sonnet-20250219\"},\"request_id\":\"req_011CbJZVx7i1oydWvzRuCfcD\"}"}}

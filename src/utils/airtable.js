@@ -14,6 +14,7 @@ const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(process
 export const influencersTable = base('Influencers');
 export const brandsTable = base('Brands');
 export const dealsTable = base('Deals');
+export const webhookEventsTable = base('WebhookEvents');
 
 export async function fetchRecords(table, filterFormula = '') {
     try {

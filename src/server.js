@@ -3,6 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
+import { findExistingEvent, recordReceive, markProcessed, markFailed } from './utils/webhook_idempotency.js';
+import { verifyPandaDocSignature } from './utils/pandadoc_signature.js';
 import fs from 'fs';
 import { releasePayout, createInvoices } from './skills/payment_handler.js';
 import { generateContracts } from './skills/contract_generator.js';
@@ -44,18 +47,37 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    if (event.type === 'invoice.paid') {
-        const invoice = event.data.object;
-        const deals = await fetchRecords(dealsTable, `stripe_invoice_id = '${invoice.id}'`);
-        if (deals.length > 0) {
-            const deal = deals[0];
-            await updateRecord(dealsTable, deal.id, {
-                status: 'PAYMENT_COLLECTED',
-                payment_collected_date: new Date().toISOString().split('T')[0]
-            });
-            logActivity('payment_handler', deal.id, 'INVOICE_PAID', 'INVOICE_SENT', 'PAYMENT_COLLECTED');
-            console.log(`✅ Payment collected for Deal ${deal.id}`);
+    const existing = await findExistingEvent('stripe', event.id);
+    if (existing) {
+        logActivity('stripe_webhook', 'duplicate', 'EVENT_DEDUPED', '-', '-');
+        return res.json({ received: true, deduped: true });
+    }
+
+    const eventRecord = await recordReceive({
+        provider: 'stripe',
+        eventId: event.id,
+        eventType: event.type,
+        verified: true,
+        rawPayload: req.body.toString().slice(0, 5000)
+    });
+
+    try {
+        if (event.type === 'invoice.paid') {
+            const invoice = event.data.object;
+            const deals = await fetchRecords(dealsTable, `stripe_invoice_id = '${invoice.id}'`);
+            if (deals.length > 0) {
+                const deal = deals[0];
+                await updateRecord(dealsTable, deal.id, {
+                    status: 'PAYMENT_COLLECTED',
+                    payment_collected_date: new Date().toISOString().split('T')[0]
+                });
+                logActivity('payment_handler', deal.id, 'INVOICE_PAID', 'INVOICE_SENT', 'PAYMENT_COLLECTED');
+                console.log(`✅ Payment collected for Deal ${deal.id}`);
+            }
         }
+        await markProcessed(eventRecord);
+    } catch (error) {
+        await markFailed(eventRecord, error.message);
     }
 
     res.json({ received: true });
@@ -64,30 +86,106 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
 // ------------------------------------------------------------------
 // PandaDoc Webhook
 // ------------------------------------------------------------------
-app.post('/webhooks/pandadoc', express.json(), async (req, res) => {
-    const { data, event } = req.body;
+app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async (req, res) => {
+    const signature = req.headers['signature'];
+    const rawBody = req.body; // Buffer
 
-    if (event === 'document_state_changed' && data?.status === 'document.completed') {
-        const docId = data?.id;
-        if (!docId) return res.json({ received: true });
-
-        // Find deal with this pandadoc_doc_id
-        const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
-        if (deals.length > 0) {
-            const deal = deals[0];
-            await updateRecord(dealsTable, deal.id, {
-                status: 'CONTRACT_SIGNED',
-                contract_signed_date: new Date().toISOString().split('T')[0]
-            });
-            logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
-            console.log(`✅ Contract signed for Deal ${deal.id}`);
-
-            // Auto-trigger invoice creation
-            await createInvoices();
-        }
+    if (!verifyPandaDocSignature(rawBody, signature, process.env.PANDADOC_WEBHOOK_SECRET)) {
+        await recordReceive({ 
+            provider: 'pandadoc', 
+            eventId: 'unverified', 
+            eventType: 'invalid_signature', 
+            verified: false, 
+            rawPayload: rawBody ? rawBody.toString().slice(0, 500) : ''
+        });
+        return res.status(401).send('Invalid signature');
     }
 
-    res.json({ received: true });
+    let parsed;
+    try {
+        parsed = JSON.parse(rawBody.toString());
+    } catch (err) {
+        await recordReceive({ 
+            provider: 'pandadoc', 
+            eventId: 'parse_error', 
+            eventType: 'invalid_json', 
+            verified: true, 
+            rawPayload: rawBody ? rawBody.toString().slice(0, 500) : ''
+        });
+        return res.status(400).send('Invalid JSON');
+    }
+
+    const { data, event, event_id } = parsed;
+
+    if (!event_id) {
+        await recordReceive({ 
+            provider: 'pandadoc', 
+            eventId: 'missing_event_id', 
+            eventType: event || 'unknown', 
+            verified: false, 
+            rawPayload: rawBody.toString().slice(0, 500) 
+        });
+        return res.status(401).send('Missing event_id');
+    }
+
+    const existing = await findExistingEvent('pandadoc', event_id);
+    if (existing) {
+        logActivity('pandadoc_webhook', 'duplicate', 'EVENT_DEDUPED', '-', '-');
+        return res.json({ received: true, deduped: true });
+    }
+
+    const eventRecord = await recordReceive({
+        provider: 'pandadoc',
+        eventId: event_id,
+        eventType: event,
+        verified: true,
+        rawPayload: rawBody.toString().slice(0, 5000)
+    });
+
+    try {
+        let shouldCreateInvoice = false;
+        if (event === 'document_state_changed' && data?.status === 'document.completed') {
+            const docId = data?.id;
+            if (docId) {
+                const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
+                if (deals.length > 0) {
+                    const deal = deals[0];
+                    await updateRecord(dealsTable, deal.id, {
+                        status: 'CONTRACT_SIGNED',
+                        contract_signed_date: new Date().toISOString().split('T')[0]
+                    });
+                    logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
+                    console.log(`✅ Contract signed for Deal ${deal.id}`);
+                    await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
+                    shouldCreateInvoice = true;
+                } else {
+                    await markProcessed(eventRecord, 'No deal found for docId');
+                }
+            } else {
+                await markProcessed(eventRecord, 'No docId in payload');
+            }
+        } else {
+            await markProcessed(eventRecord, `Ignored event: ${event}`);
+        }
+
+        res.json({ received: true });
+
+        if (shouldCreateInvoice) {
+            setImmediate(async () => {
+                try {
+                    await createInvoices();
+                    console.log('Background invoice creation completed');
+                } catch (err) {
+                    console.error('Invoice creation failed after contract signed:', err.message);
+                }
+            });
+        }
+        return;
+    } catch (error) {
+        await markFailed(eventRecord, error.message);
+        res.json({ received: true });
+        return;
+    }
 });
 
 // ------------------------------------------------------------------
@@ -99,7 +197,8 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
         const ts = req.headers['x-twilio-email-event-webhook-timestamp'];
         const pubKey = process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
 
-        if (!verifyInboundSignature(req.body, sig, ts, pubKey)) {
+        const verified = verifyInboundSignature(req.body, sig, ts, pubKey);
+        if (!verified) {
             console.warn('❌ SendGrid inbound signature failed');
             return res.status(401).send('Invalid signature');
         }
@@ -121,10 +220,33 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
 
         const fields = fakeReq.body || {};
         const fromField = fields.from || '';
+        const subjectField = fields.subject || '';
+        const timestampStr = ts || new Date().getTime().toString();
+        
+        const idempotencyKey = crypto.createHash('sha256')
+            .update(`${fromField}|${timestampStr}|${subjectField}`)
+            .digest('hex')
+            .slice(0, 32);
+
+        const existing = await findExistingEvent('sendgrid', idempotencyKey);
+        if (existing) {
+            logActivity('sendgrid_webhook', 'duplicate', 'EVENT_DEDUPED', '-', '-');
+            return res.status(200).send();
+        }
+
+        const eventRecord = await recordReceive({
+            provider: 'sendgrid',
+            eventId: idempotencyKey,
+            eventType: 'inbound_parse',
+            verified: verified,
+            rawPayload: req.body ? req.body.toString().slice(0, 5000) : ''
+        });
+
         const emailMatch = fromField.match(/<([^>]+)>/);
         const senderEmail = emailMatch ? emailMatch[1].trim() : fromField.trim();
 
         if (!senderEmail) {
+            await markFailed(eventRecord, 'No sender email');
             return res.status(200).send();
         }
 
@@ -138,25 +260,33 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
         if (!textContent) {
             console.warn('Malformed inbound email (no text or html content)');
             logActivity('inbound_orphan', 'unknown', 'MALFORMED_EMAIL', 'NONE', 'NONE');
+            await markFailed(eventRecord, 'Malformed email (no text content)');
             return res.status(200).send();
         }
 
-        // Identify sender
-        const influencers = await fetchRecords(influencersTable, `{email} = '${senderEmail}'`);
-        const brands = await fetchRecords(brandsTable, `{contact_email} = '${senderEmail}'`);
+        try {
+            // Identify sender
+            const influencers = await fetchRecords(influencersTable, `{email} = '${senderEmail}'`);
+            const brands = await fetchRecords(brandsTable, `{contact_email} = '${senderEmail}'`);
 
-        if (influencers.length > 0 && brands.length > 0) {
-            console.warn(`Email ${senderEmail} matches both influencer and brand. Treating as influencer.`);
-            await processInboundEmail(influencers[0], textContent, 'influencer');
-        } else if (influencers.length > 0) {
-            await processInboundEmail(influencers[0], textContent, 'influencer');
-        } else if (brands.length > 0) {
-            await processInboundEmail(brands[0], textContent, 'brand');
-        } else {
-            logActivity('inbound_orphan', 'unknown', 'INBOUND_ORPHAN', 'NONE', 'NONE');
+            if (influencers.length > 0 && brands.length > 0) {
+                console.warn(`Email ${senderEmail} matches both influencer and brand. Treating as influencer.`);
+                await processInboundEmail(influencers[0], textContent, 'influencer');
+            } else if (influencers.length > 0) {
+                await processInboundEmail(influencers[0], textContent, 'influencer');
+            } else if (brands.length > 0) {
+                await processInboundEmail(brands[0], textContent, 'brand');
+            } else {
+                logActivity('inbound_orphan', 'unknown', 'INBOUND_ORPHAN', 'NONE', 'NONE');
+            }
+
+            await markProcessed(eventRecord, `Processed email from ${senderEmail}`);
+            return res.status(200).send();
+        } catch (processErr) {
+            console.error('Email processing failed:', processErr.message);
+            await markFailed(eventRecord, processErr.message);
+            return res.status(200).send();
         }
-
-        return res.status(200).send();
     } catch (err) {
         console.error('Inbound Email Error:', err.message);
         // Always return 200 to SendGrid
