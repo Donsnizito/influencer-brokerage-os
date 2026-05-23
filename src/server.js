@@ -195,9 +195,8 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
     try {
         const sig = req.headers['x-twilio-email-event-webhook-signature'];
         const ts = req.headers['x-twilio-email-event-webhook-timestamp'];
-        const pubKey = process.env.SENDGRID_WEBHOOK_PUBLIC_KEY;
 
-        const verified = verifyInboundSignature(req.body, sig, ts, pubKey);
+        const verified = verifyInboundSignature(req.body, sig, ts);
         if (!verified) {
             console.warn('❌ SendGrid inbound signature failed');
             return res.status(401).send('Invalid signature');
