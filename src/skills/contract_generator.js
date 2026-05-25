@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { dealsTable, brandsTable, influencersTable, fetchRecords, updateRecord } from '../utils/airtable.js';
 import { logActivity } from '../utils/logger.js';
 import { logError, Tiers } from '../utils/errorHandler.js';
@@ -117,6 +118,6 @@ export async function generateContracts() {
 }
 
 // Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     generateContracts().then(() => console.log('Contract generation run complete.'));
 }

@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
+import { pathToFileURL } from 'url';
 import path from 'path';
 import { dealsTable, brandsTable, influencersTable, fetchRecords, updateRecord } from '../utils/airtable.js';
 import { logActivity } from '../utils/logger.js';
@@ -196,6 +197,6 @@ export async function releasePayout(dealId) {
 }
 
 // Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     createInvoices().then(() => console.log('Invoice creation run complete.'));
 }

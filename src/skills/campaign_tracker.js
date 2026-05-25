@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
+import { pathToFileURL } from 'url';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
@@ -93,6 +94,6 @@ export async function runCampaignTracker() {
 }
 
 // Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     runCampaignTracker().then(() => console.log('Campaign tracker run complete.'));
 }
