@@ -52,15 +52,17 @@ export async function generateContracts() {
         
         const broker_fee = deal.agreed_rate ? Math.round(Number(deal.agreed_rate) * 0.15) : 0;
 
+        const today = new Date().toISOString().split('T')[0];
         const variables = [
-            { name: "agreed_rate", value: deal.agreed_rate?.toString() || "" },
-            { name: "deliverables_description", value: terms.deliverable_type || deal.deliverables || "" },
-            { name: "post_deadline", value: terms.timeline || "" },
-            { name: "exclusivity_clause", value: terms.exclusivity_window ? "Yes" : "No" },
-            { name: "usage_rights", value: terms.usage_rights || "None" },
-            { name: "revision_limit", value: terms.revision_allowance?.toString() || "1" },
-            { name: "broker_fee", value: broker_fee.toString() },
-            { name: "contract_date", value: new Date().toISOString().split('T')[0] }
+            { name: "Brand.Name", value: brand.company_name || "" },
+            { name: "Brand.ContactEmail", value: brand.contact_email || "" },
+            { name: "Creator.Name", value: influencer.name || "" },
+            { name: "Creator.Email", value: influencer.email || "" },
+            { name: "Creator.ChannelURL", value: influencer.channel_url || "" },
+            { name: "Deal.AgreedRate", value: deal.agreed_rate != null ? String(deal.agreed_rate) : "" },
+            { name: "Deal.Deliverables", value: terms.deliverable_type || deal.deliverables || "" },
+            { name: "Deal.ID", value: deal.deal_id || "" },
+            { name: "Agreement.Date", value: today }
         ];
 
         try {
@@ -75,7 +77,7 @@ export async function generateContracts() {
                         email: brand.contact_email,
                         first_name: brand.contact_name?.split(' ')[0] || 'Brand',
                         last_name: brand.contact_name?.split(' ').slice(1).join(' ') || 'Contact',
-                        role: "Signer"
+                        role: process.env.PANDADOC_BRAND_ROLE || "Client"
                     }],
                     tokens: variables
                 });
@@ -91,7 +93,7 @@ export async function generateContracts() {
                         email: influencer.email,
                         first_name: influencer.name?.split(' ')[0] || 'Creator',
                         last_name: influencer.name?.split(' ').slice(1).join(' ') || '',
-                        role: "Signer"
+                        role: process.env.PANDADOC_INFLUENCER_ROLE || "Client"
                     }],
                     tokens: variables
                 });

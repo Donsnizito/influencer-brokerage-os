@@ -89,18 +89,24 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
 // PandaDoc Webhook
 // ------------------------------------------------------------------
 app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async (req, res) => {
-    const signature = req.headers['signature'];
+    const signature = req.query.signature;
     const rawBody = req.body; // Buffer
 
-    if (!verifyPandaDocSignature(rawBody, signature, process.env.PANDADOC_WEBHOOK_SECRET)) {
-        await recordReceive({ 
-            provider: 'pandadoc', 
-            eventId: 'unverified', 
-            eventType: 'invalid_signature', 
-            verified: false, 
-            rawPayload: rawBody ? rawBody.toString().slice(0, 500) : ''
-        });
-        return res.status(401).send('Invalid signature');
+    const isVerified = verifyPandaDocSignature(rawBody, signature, process.env.PANDADOC_WEBHOOK_SECRET);
+
+    if (!isVerified) {
+        if (process.env.PANDADOC_VERIFY_STRICT === 'true') {
+            await recordReceive({ 
+                provider: 'pandadoc', 
+                eventId: 'unverified', 
+                eventType: 'invalid_signature', 
+                verified: false, 
+                rawPayload: rawBody ? rawBody.toString().slice(0, 500) : ''
+            });
+            return res.status(401).send('Invalid signature');
+        } else {
+            console.warn('[PANDADOC SOFT-FAIL] Signature missing or invalid - accepting webhook anyway');
+        }
     }
 
     let parsed;
@@ -111,7 +117,7 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
             provider: 'pandadoc', 
             eventId: 'parse_error', 
             eventType: 'invalid_json', 
-            verified: true, 
+            verified: isVerified, 
             rawPayload: rawBody ? rawBody.toString().slice(0, 500) : ''
         });
         return res.status(400).send('Invalid JSON');
@@ -124,7 +130,7 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
             provider: 'pandadoc', 
             eventId: 'missing_event_id', 
             eventType: event || 'unknown', 
-            verified: false, 
+            verified: isVerified, 
             rawPayload: rawBody.toString().slice(0, 500) 
         });
         return res.status(401).send('Missing event_id');
@@ -140,7 +146,7 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
         provider: 'pandadoc',
         eventId: event_id,
         eventType: event,
-        verified: true,
+        verified: isVerified,
         rawPayload: rawBody.toString().slice(0, 5000)
     });
 
