@@ -56,7 +56,8 @@ export async function createInvoices() {
                 customer: customer.id,
                 auto_advance: false,
                 collection_method: 'send_invoice',
-                days_until_due: 14
+                days_until_due: 14,
+                pending_invoice_items_behavior: 'include'
             });
 
             // Explicitly finalize the invoice — this bundles all pending InvoiceItems for the customer
