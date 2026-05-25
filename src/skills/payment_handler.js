@@ -50,14 +50,18 @@ export async function createInvoices() {
                 description: `Influencer Marketing Campaign — ${deal.deliverables || 'Standard Package'} — ${brand.company_name || 'Brand'}`
             });
 
-            // Create and Finalize Invoice
+            // Create invoice WITHOUT auto_advance, so we can explicitly finalize after bundling
             const invoice = await stripe.invoices.create({
                 customer: customer.id,
-                auto_advance: true,
+                auto_advance: false,
                 collection_method: 'send_invoice',
                 days_until_due: 14
             });
 
+            // Explicitly finalize the invoice — this bundles all pending InvoiceItems for the customer
+            await stripe.invoices.finalizeInvoice(invoice.id);
+
+            // Then send the finalized invoice
             await stripe.invoices.sendInvoice(invoice.id);
 
             // Update Airtable
