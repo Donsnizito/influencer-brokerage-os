@@ -123,115 +123,118 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
         return res.status(400).send('Invalid JSON');
     }
 
-    const { data, event, event_id } = parsed;
-
-    if (!event_id) {
-        await recordReceive({ 
-            provider: 'pandadoc', 
-            eventId: 'missing_event_id', 
-            eventType: event || 'unknown', 
-            verified: isVerified, 
-            rawPayload: rawBody.toString().slice(0, 500) 
-        });
-        return res.status(401).send('Missing event_id');
+    if (!Array.isArray(parsed)) {
+        console.warn('PandaDoc webhook payload is not an array.');
+        return res.status(200).send('Payload not an array - ignored');
     }
 
-    const existing = await findExistingEvent('pandadoc', event_id);
-    if (existing) {
-        logActivity('pandadoc_webhook', 'duplicate', 'EVENT_DEDUPED', '-', '-');
-        return res.json({ received: true, deduped: true });
-    }
+    for (const evt of parsed) {
+        const { event, data } = evt;
+        const docId = data?.id || '';
+        const docStatus = data?.status || '';
+        const dateModified = data?.date_modified || '';
 
-    const eventRecord = await recordReceive({
-        provider: 'pandadoc',
-        eventId: event_id,
-        eventType: event,
-        verified: isVerified,
-        rawPayload: rawBody.toString().slice(0, 5000)
-    });
+        const event_id = crypto.createHash('sha256')
+            .update(`${docId}|${docStatus}|${dateModified}`)
+            .digest('hex')
+            .slice(0, 32);
 
-    try {
-        if (event === 'document_state_changed') {
-            const docStatus = data?.status;
-            const docId = data?.id;
-            if (!docId) {
-                await markProcessed(eventRecord, 'No doc ID in payload');
-                return res.json({ received: true });
-            }
-            
-            const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
-            if (deals.length === 0) {
-                await markProcessed(eventRecord, `No deal found for doc ${docId}`);
-                return res.json({ received: true });
-            }
-            const deal = deals[0];
-            
-            if (docStatus === 'document.completed') {
-                await updateRecord(dealsTable, deal.id, {
-                    status: 'CONTRACT_SIGNED',
-                    contract_signed_date: new Date().toISOString().split('T')[0]
-                });
-                logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
-                await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
-                res.json({ received: true });
-                setImmediate(async () => {
-                    try {
-                        await createInvoices();
-                    } catch (err) {
-                        logError(Tiers.HIGH, 'background_invoice', 'Invoice creation failed', { error: err.message });
-                    }
-                });
-                return;
-            }
-            
-            if (docStatus === 'document.draft') {
-                if (deal.contract_state !== 'DRAFTING') {
-                    await markProcessed(eventRecord, `Deal ${deal.id} not in DRAFTING state (was ${deal.contract_state})`);
-                    return res.json({ received: true });
-                }
-                
-                try {
-                    await pandaDocClient.post(`/documents/${docId}/send`, { silent: false });
-                    logActivity('contract_generator', deal.id, 'DRAFT_SENT', 'DRAFTING', 'SENT');
-                    
-                    const allDocIds = deal.pandadoc_doc_id.split(',').map(s => s.trim());
-                    const sentDocs = (deal.contract_docs_sent || '').split(',').filter(s => s);
-                    sentDocs.push(docId);
-                    const allSent = allDocIds.every(id => sentDocs.includes(id));
-                    
-                    if (allSent) {
-                        await updateRecord(dealsTable, deal.id, {
-                            contract_state: 'SENT',
-                            contract_docs_sent: sentDocs.join(','),
-                            status: 'CONTRACT_SENT',
-                            contract_sent_date: new Date().toISOString().split('T')[0]
-                        });
-                        logActivity('contract_generator', deal.id, 'ALL_CONTRACTS_SENT', 'DRAFTING', 'CONTRACT_SENT');
-                    } else {
-                        await updateRecord(dealsTable, deal.id, {
-                            contract_docs_sent: sentDocs.join(',')
-                        });
-                    }
-                    
-                    await markProcessed(eventRecord, `Doc ${docId} sent for Deal ${deal.id}`);
-                } catch (err) {
-                    await markFailed(eventRecord, `Send failed for doc ${docId}: ${err.message}`);
-                    logError(Tiers.HIGH, 'contract_generator', `Failed to send doc ${docId}`, { error: err.message });
-                }
-                
-                return res.json({ received: true });
-            }
-            
-            await markProcessed(eventRecord, `Unhandled status: ${docStatus}`);
-            return res.json({ received: true });
-        } else {
-            await markProcessed(eventRecord, `Ignored event: ${event}`);
-            return res.json({ received: true });
+        const existing = await findExistingEvent('pandadoc', event_id);
+        if (existing) {
+            logActivity('pandadoc_webhook', 'duplicate', 'EVENT_DEDUPED', '-', '-');
+            continue;
         }
-    } catch (error) {
-        await markFailed(eventRecord, error.message);
-        return res.json({ received: true });
+
+        const eventRecord = await recordReceive({
+            provider: 'pandadoc',
+            eventId: event_id,
+            eventType: event || 'unknown',
+            verified: isVerified,
+            rawPayload: rawBody.toString().slice(0, 5000)
+        });
+
+        try {
+            if (event === 'document_state_changed') {
+                if (!docId) {
+                    await markProcessed(eventRecord, 'No doc ID in payload');
+                    continue;
+                }
+                
+                const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
+                if (deals.length === 0) {
+                    await markProcessed(eventRecord, `No deal found for doc ${docId}`);
+                    continue;
+                }
+                const deal = deals[0];
+                
+                if (docStatus === 'document.completed') {
+                    await updateRecord(dealsTable, deal.id, {
+                        status: 'CONTRACT_SIGNED',
+                        contract_signed_date: new Date().toISOString().split('T')[0]
+                    });
+                    logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
+                    await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
+                    setImmediate(async () => {
+                        try {
+                            await createInvoices();
+                        } catch (err) {
+                            logError(Tiers.HIGH, 'background_invoice', 'Invoice creation failed', { error: err.message });
+                        }
+                    });
+                    continue;
+                }
+                
+                if (docStatus === 'document.draft') {
+                    if (deal.contract_state !== 'DRAFTING') {
+                        await markProcessed(eventRecord, `Deal ${deal.id} not in DRAFTING state (was ${deal.contract_state})`);
+                        continue;
+                    }
+                    
+                    try {
+                        await pandaDocClient.post(`/documents/${docId}/send`, { silent: false });
+                        logActivity('contract_generator', deal.id, 'DRAFT_SENT', 'DRAFTING', 'SENT');
+                        
+                        const allDocIds = deal.pandadoc_doc_id.split(',').map(s => s.trim());
+                        const sentDocs = (deal.contract_docs_sent || '').split(',').filter(s => s);
+                        sentDocs.push(docId);
+                        const allSent = allDocIds.every(id => sentDocs.includes(id));
+                        
+                        if (allSent) {
+                            await updateRecord(dealsTable, deal.id, {
+                                contract_state: 'SENT',
+                                contract_docs_sent: sentDocs.join(','),
+                                status: 'CONTRACT_SENT',
+                                contract_sent_date: new Date().toISOString().split('T')[0]
+                            });
+                            logActivity('contract_generator', deal.id, 'ALL_CONTRACTS_SENT', 'DRAFTING', 'CONTRACT_SENT');
+                        } else {
+                            await updateRecord(dealsTable, deal.id, {
+                                contract_docs_sent: sentDocs.join(',')
+                            });
+                        }
+                        
+                        await markProcessed(eventRecord, `Doc ${docId} sent for Deal ${deal.id}`);
+                    } catch (err) {
+                        await markFailed(eventRecord, `Send failed for doc ${docId}: ${err.message}`);
+                        logError(Tiers.HIGH, 'contract_generator', `Failed to send doc ${docId}`, { error: err.message });
+                    }
+                    
+                    continue;
+                }
+                
+                await markProcessed(eventRecord, `Unhandled status: ${docStatus}`);
+                continue;
+            } else {
+                await markProcessed(eventRecord, `Ignored event: ${event}`);
+                continue;
+            }
+        } catch (error) {
+            await markFailed(eventRecord, error.message);
+            continue;
+        }
     }
+
+    res.json({ received: true });
 });
 
 // ------------------------------------------------------------------
