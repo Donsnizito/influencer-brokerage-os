@@ -5,7 +5,6 @@ import path from 'path';
 import { dealsTable, brandsTable, influencersTable, fetchRecords, updateRecord } from '../utils/airtable.js';
 import { logActivity } from '../utils/logger.js';
 import { logError, Tiers } from '../utils/errorHandler.js';
-import nodemailer from 'nodemailer';
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -81,14 +80,6 @@ export async function createInvoices() {
     }
 }
 
-const transporter = process.env.SENDGRID_API_KEY 
-    ? nodemailer.createTransport({
-        host: 'smtp.sendgrid.net',
-        port: 587,
-        auth: { user: 'apikey', pass: process.env.SENDGRID_API_KEY }
-      })
-    : null;
-
 async function sendOperatorPayoutAlert({ dealId, dealRecordId, amount, grossAmount, brokerFee, influencerName, influencerEmail }) {
     const operatorEmail = process.env.OPERATOR_NOTIFICATION_EMAIL;
     if (!operatorEmail) {
@@ -96,8 +87,8 @@ async function sendOperatorPayoutAlert({ dealId, dealRecordId, amount, grossAmou
         return;
     }
     
-    if (!transporter) {
-        logError(Tiers.HIGH, 'payment_handler', 'No email transporter configured — payout alert not sent', { dealId });
+    if (!process.env.SENDGRID_API_KEY) {
+        logError(Tiers.HIGH, 'payment_handler', 'SENDGRID_API_KEY not set — payout alert not sent', { dealId });
         return;
     }
     
@@ -132,13 +123,37 @@ This is an automated alert from the brokerage system.
 `;
 
     try {
-        await transporter.sendMail({
-            from: `"Brokerage Alerts" <${fromEmail}>`,
-            to: operatorEmail,
-            subject,
-            text: body
+        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.SENDGRID_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                personalizations: [{
+                    to: [{ email: operatorEmail }]
+                }],
+                from: {
+                    email: fromEmail,
+                    name: 'Brokerage Alerts'
+                },
+                subject: subject,
+                content: [{
+                    type: 'text/plain',
+                    value: body
+                }]
+            })
         });
-        console.log(`✉️  Operator alert sent to ${operatorEmail} for Deal ${dealId}`);
+        
+        if (response.ok) {
+            console.log(`✉️  Operator alert sent to ${operatorEmail} for Deal ${dealId}`);
+        } else {
+            const errText = await response.text();
+            logError(Tiers.HIGH, 'payment_handler', `Failed to send operator alert for Deal ${dealId}`, { 
+                status: response.status, 
+                error: errText 
+            });
+        }
     } catch (err) {
         logError(Tiers.HIGH, 'payment_handler', `Failed to send operator alert for Deal ${dealId}`, { error: err.message });
     }
