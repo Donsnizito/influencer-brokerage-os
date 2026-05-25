@@ -283,3 +283,5 @@
 {"timestamp":"2026-05-22T18:49:49.938Z","skill_name":"ingest_sprint","deal_id":"recRXYwzwZcJ6FQLK","action":"CSV_INGEST","previous_state":"NONE","new_state":"INFLUENCER_DISCOVERED"}
 {"timestamp":"2026-05-22T18:49:50.134Z","skill_name":"ingest_sprint","deal_id":"recVVOd0UFj0FXLCJ","action":"CSV_INGEST","previous_state":"NONE","new_state":"INFLUENCER_DISCOVERED"}
 {"timestamp":"2026-05-25T03:22:40.241Z","skill_name":"payment_handler","deal_id":"rec56VRkkr3zsMXNu","action":"INVOICE_SENT","previous_state":"CONTRACT_SIGNED","new_state":"INVOICE_SENT"}
+{"timestamp":"2026-05-25T03:39:14.526Z","skill_name":"payment_handler","deal_id":"rec56VRkkr3zsMXNu","action":"INVOICE_SENT","previous_state":"CONTRACT_SIGNED","new_state":"INVOICE_SENT"}
+{"timestamp":"2026-05-25T03:56:02.159Z","skill_name":"payment_handler","deal_id":"rec56VRkkr3zsMXNu","action":"INVOICE_SENT","previous_state":"CONTRACT_SIGNED","new_state":"INVOICE_SENT"}

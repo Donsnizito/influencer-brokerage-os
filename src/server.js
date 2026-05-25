@@ -64,9 +64,10 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
     });
 
     try {
-        if (event.type === 'invoice.paid') {
-            const invoice = event.data.object;
-            const deals = await fetchRecords(dealsTable, `stripe_invoice_id = '${invoice.id}'`);
+        if (event.type === 'invoice.paid' || event.type === 'invoice_payment.paid') {
+            const obj = event.data.object;
+            const invoiceId = event.type === 'invoice.paid' ? obj.id : obj.invoice;
+            const deals = await fetchRecords(dealsTable, `stripe_invoice_id = '${invoiceId}'`);
             if (deals.length > 0) {
                 const deal = deals[0];
                 await updateRecord(dealsTable, deal.id, {
