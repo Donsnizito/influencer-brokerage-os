@@ -344,6 +344,89 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
 });
 
 // ------------------------------------------------------------------
+// SendGrid Event Webhook (Bounces, etc)
+// ------------------------------------------------------------------
+app.post('/webhooks/sendgrid/bounce', express.raw({ type: 'application/json' }), async (req, res) => {
+    try {
+        const sig = req.headers['x-twilio-email-event-webhook-signature'];
+        const ts = req.headers['x-twilio-email-event-webhook-timestamp'];
+
+        const verified = verifyInboundSignature(req.body, sig, ts);
+        if (!verified) {
+            console.warn('❌ SendGrid event signature failed');
+            return res.status(401).send('Invalid signature');
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(req.body.toString());
+        } catch (e) {
+            return res.status(400).send('Invalid JSON');
+        }
+
+        if (!Array.isArray(parsed)) {
+            parsed = [parsed];
+        }
+
+        for (const evt of parsed) {
+            const sg_message_id = evt.sg_message_id || '';
+            const email = evt.email || '';
+            const event = evt.event || '';
+
+            if (event !== 'bounce') continue;
+
+            const idempotencyKey = crypto.createHash('sha256')
+                .update(`bounce|${sg_message_id}|${email}`)
+                .digest('hex')
+                .slice(0, 32);
+
+            const existing = await findExistingEvent('sendgrid', idempotencyKey);
+            if (existing) {
+                continue;
+            }
+
+            const eventRecord = await recordReceive({
+                provider: 'sendgrid',
+                eventId: idempotencyKey,
+                eventType: 'bounce',
+                verified: verified,
+                rawPayload: JSON.stringify(evt).slice(0, 5000)
+            });
+
+            try {
+                // Find in influencers
+                const influencers = await fetchRecords(influencersTable, `{email} = '${email}'`);
+                if (influencers.length > 0) {
+                    await updateRecord(influencersTable, influencers[0].id, {
+                        email_invalid: true,
+                        status: 'BOUNCED'
+                    });
+                } else {
+                    // Find in brands
+                    const brands = await fetchRecords(brandsTable, `{contact_email} = '${email}'`);
+                    if (brands.length > 0) {
+                        await updateRecord(brandsTable, brands[0].id, {
+                            email_invalid: true,
+                            status: 'BOUNCED'
+                        });
+                    }
+                }
+
+                logActivity('sendgrid_webhook', email, 'BOUNCE_PROCESSED', '-', 'BOUNCED');
+                await markProcessed(eventRecord, `Processed bounce for ${email}`);
+            } catch (err) {
+                await markFailed(eventRecord, err.message);
+            }
+        }
+
+        res.status(200).send();
+    } catch (err) {
+        console.error('SendGrid Bounce Error:', err.message);
+        res.status(200).send();
+    }
+});
+
+// ------------------------------------------------------------------
 // JSON API (after webhooks)
 // ------------------------------------------------------------------
 app.use(express.json());
@@ -526,8 +609,8 @@ app.get('/api/deals', async (req, res) => {
         });
 
         const mappedDeals = deals.map(deal => {
-            const infId = deal.influencer_id?.[0];
-            const brandId = deal.brand_id?.[0];
+            const infId = deal.influencer_id;
+            const brandId = deal.brand_id;
             
             const inf = influencersMap[infId] || {};
             const br = brandsMap[brandId] || {};
