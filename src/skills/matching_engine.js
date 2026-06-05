@@ -9,14 +9,22 @@
 // (Decision A). The filter makes that commitment economically survivable.
 //
 // Five-stage filter (applied per Creator, short-circuit on first failure):
-//   Stage 0 — Field presence (structural)
-//   Stage 1 — Roster eligibility (governance)
-//   Stage 2 — Niche match (category)
-//   Stage 3 — Rate range parse + band overlap (economics)
-//   Stage 4 — Delivery reliability evidence non-empty (trust)
+//   Stage 1 — Roster eligibility (governance)  — missing-key guard included
+//   Stage 2 — Niche match (category)           — missing-key guard included
+//   Stage 3 — Rate range parse + band overlap  — missing-key guard included
+//   Stage 4 — Delivery reliability evidence non-empty (trust, override-eligible)
 //
-// Pure transformation over inputs — no side effects beyond the Stage 4 override
-// WARN log. No scoring, no ranking. Brief 11 ranks; Brief 12 wires into production.
+// Per §0.3 doctrine: the Airtable JS SDK omits unwritten Long Text fields from
+// wire payloads entirely — the field key is absent even when the column exists
+// in the schema. delivery_reliability_evidence is a Long Text field that is
+// written post-roster-injection (Brief 18), not at record creation. It is a
+// populate-when-known field, not a creation-required field. Missing key and
+// empty value are semantically identical here and both fail Stage 4 (or pass
+// under the Stage 4 test-only override). The unified Stage 0 "creator_record_
+// malformed" block has been removed to reflect this distinction correctly.
+//
+// Brief 10-supplement (2026-06-04): per-stage missing-field guards (option ii).
+// Brief 11 ranks; Brief 12 wires into production.
 //
 // Public API: matchCreatorsForBrand(brandId, roster = null, options = {})
 // No other exports from this file.
@@ -138,11 +146,16 @@ function parseRateRange(rateString) {
  * Pure transformation over inputs — no side effects beyond logging.
  *
  * Filter stages (applied in order; first failure short-circuits later stages):
- *   Stage 0: Field presence         — required fields defined on creator record
- *   Stage 1: Roster eligibility     — creator.roster_eligibility === 'active'
- *   Stage 2: Niche match            — creator.niche === brand.niche (strict)
- *   Stage 3: Rate range             — parse success + overlap with $5K–$15K band
- *   Stage 4: Delivery evidence      — non-empty string (override-eligible)
+ *   Stage 1: Roster eligibility — missing-key guard + creator.roster_eligibility === 'active'
+ *   Stage 2: Niche match        — missing-key guard + creator.niche === brand.niche (strict)
+ *   Stage 3: Rate range         — missing-key guard + parse success + overlap with $5K–$15K band
+ *   Stage 4: Delivery evidence  — non-empty string (override-eligible; absent key treated as empty)
+ *
+ * Per §0.3 doctrine: Airtable SDK omits unwritten Long Text fields from wire
+ * payloads. delivery_reliability_evidence is populate-when-known — absent key
+ * and empty value are semantically identical and both fail Stage 4 (or pass
+ * under the test-only override). Per-stage missing-key guards (option ii)
+ * replace the original unified Stage 0 block.
  *
  * @param {string} brandId - Airtable record ID for the Brand. Required.
  * @param {Array<Object>|null} [roster=null] - Pre-fetched Influencer records.
@@ -151,7 +164,7 @@ function parseRateRange(rateString) {
  *        contract).
  * @param {Object} [options]
  * @param {boolean} [options.ignoreEmptyDeliveryEvidence=false] - Test-only
- *        override. When strictly === true, allows creators with empty
+ *        override. When strictly === true, allows creators with empty or absent
  *        delivery_reliability_evidence to pass Stage 4. Logs at WARN per
  *        creator. MUST NOT be set in production code paths. Default false.
  *
@@ -168,7 +181,7 @@ function parseRateRange(rateString) {
  *
  * Does NOT throw on:
  *   - Empty matches (returns matches: [], flags: ['no_matches']).
- *   - Malformed creator records (reject with 'creator_record_malformed', continue).
+ *   - Missing required fields per creator (per-stage rejection, continue).
  *   - Invalid rate_range strings (reject with 'rate_range_invalid', continue).
  */
 export async function matchCreatorsForBrand(brandId, roster = null, options = { ignoreEmptyDeliveryEvidence: false }) {
@@ -191,8 +204,7 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
     // ── Call-level aggregation accumulators ───────────────────────────────────
     const matches  = [];
     const rejected = [];
-    let looseParsedCount    = 0;
-    let malformedCount      = 0;
+    let looseParsedCount        = 0;
     let overrideFiredOnThisCall = false;
 
     // ── Per-creator filter loop ───────────────────────────────────────────────
@@ -200,37 +212,22 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
     // Matches are in roster-order — Brief 11 will rank.
     for (const creator of creatorRoster) {
         // Derive display name for rejection records and override logs.
-        // Stage 0 does NOT reject on missing name — only the four required fields.
+        // Missing name is NOT a rejection — name is not an underwriting field.
         const creatorName = creator.name ?? creator.id ?? '(unnamed)';
 
-        // ── Stage 0: Field presence ───────────────────────────────────────────
-        // Check that all four required underwriting fields are defined on the
-        // record object. Uses 'in' operator to distinguish "field absent from
-        // record" from "field present but empty" — empty values fail at the
-        // appropriate later stage (e.g., empty delivery_reliability_evidence
-        // fails Stage 4, not Stage 0). Stage 0 is purely structural.
-        const requiredFields = [
-            'roster_eligibility',
-            'niche',
-            'rate_range',
-            'delivery_reliability_evidence'
-        ];
-        const missingField = requiredFields.find(f => !(f in creator));
-        if (missingField !== undefined) {
+        // ── Stage 1: Roster eligibility ───────────────────────────────────────
+        // Missing-key guard first (§0.3 doctrine: absence and empty value
+        // are semantically distinct failure modes, but both gate at the
+        // purpose-appropriate stage). Then strict string equality against
+        // 'active'. The override does NOT apply; governance cannot be bridged.
+        if (!('roster_eligibility' in creator)) {
             rejected.push({
                 creatorId:   creator.id,
                 creatorName,
-                reason: 'creator_record_malformed'
+                reason: 'roster_eligibility_missing'
             });
-            malformedCount++;
             continue;
         }
-
-        // ── Stage 1: Roster eligibility ───────────────────────────────────────
-        // Strict string equality against 'active'. Any other value — including
-        // the other four valid enum values from Brief 7b (inactive, flagged_breach,
-        // flagged_quality, under_review), unexpected values, or empty string —
-        // fails. The override does NOT apply here; governance cannot be bridged.
         if (creator.roster_eligibility !== 'active') {
             rejected.push({
                 creatorId:   creator.id,
@@ -241,11 +238,17 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
         }
 
         // ── Stage 2: Niche match ──────────────────────────────────────────────
-        // Strict string equality — exact leaf match only. No taxonomy walk.
-        // A brand with niche 'pets' does NOT match a creator with niche 'pets_dogs'
-        // even though pets_dogs is a leaf under pets in the taxonomy. This is
-        // deliberate: the underwriting commitment is specific to the leaf niche.
-        // The override does NOT apply.
+        // Missing-key guard first. Then strict string equality — exact leaf
+        // match only, no taxonomy walk. A brand with niche 'pets' does NOT
+        // match a creator with niche 'pets_dogs'. The override does NOT apply.
+        if (!('niche' in creator)) {
+            rejected.push({
+                creatorId:   creator.id,
+                creatorName,
+                reason: 'niche_missing'
+            });
+            continue;
+        }
         if (creator.niche !== brand.niche) {
             rejected.push({
                 creatorId:   creator.id,
@@ -258,8 +261,19 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
         // ── Stage 3: Rate range parse + band overlap ──────────────────────────
 
         // Stage 3a: Parse
-        // Three outcomes: strict pass (no flag), loose pass (increment counter),
-        // invalid (reject with 'rate_range_invalid'). Override does not apply.
+        // Missing-key guard first — rate_range is a creation-required field
+        // (Single Line Text; SDK always includes it when written). If absent,
+        // reject with 'rate_range_missing'. Then three parse outcomes: strict
+        // pass (no flag), loose pass (increment counter), invalid (reject with
+        // 'rate_range_invalid'). Override does not apply.
+        if (!('rate_range' in creator)) {
+            rejected.push({
+                creatorId:   creator.id,
+                creatorName,
+                reason: 'rate_range_missing'
+            });
+            continue;
+        }
         const parseResult = parseRateRange(creator.rate_range);
         if (!parseResult.parsed) {
             rejected.push({
@@ -291,19 +305,24 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
         }
 
         // ── Stage 4: Delivery reliability evidence non-empty ──────────────────
-        // The field must be a string with at least one non-whitespace character
-        // after trimming. Empty string, whitespace-only, null, and undefined
-        // (defense-in-depth; structurally caught by Stage 0 but Stage 4 is
-        // still guarded) all fail.
+        // Per §0.3 doctrine: delivery_reliability_evidence is a Long Text field
+        // that may be absent from the wire payload entirely (Airtable SDK omits
+        // unwritten Long Text keys). Absent key, null, empty string, and
+        // whitespace-only string are semantically identical here — all fail Stage 4.
+        // This is the override-eligible stage. The field is read defensively:
+        //   record.delivery_reliability_evidence ?? ''
+        // rather than via 'in' check, treating absent-key and empty-value as one.
         //
         // This is the override-eligible stage. The override exists as a bridge
         // mechanism for the build sequence: delivery_reliability_evidence was
         // added in Brief 7b but the roster injection (Brief 18) hasn't run yet,
         // so the live roster may not have the field populated when downstream
         // briefs exercise matching for the first time. It is NOT a feature.
+        // Coerce: absent key → undefined → '' via ??, then check for non-empty trimmed string.
+        const evidenceValue = creator.delivery_reliability_evidence ?? '';
         const hasEvidence = (
-            typeof creator.delivery_reliability_evidence === 'string' &&
-            creator.delivery_reliability_evidence.trim().length > 0
+            typeof evidenceValue === 'string' &&
+            evidenceValue.trim().length > 0
         );
 
         if (!hasEvidence) {
@@ -315,6 +334,9 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
                 // Emit a structured WARN per affected creator so log-review can
                 // surface all override-activated matches. The bracketed prefix
                 // [matching_engine OVERRIDE] is the grep target.
+                // Note: evidenceValue may be '' because the key was absent on
+                // the wire (§0.3 Airtable SDK omission) OR because the field
+                // was explicitly written as empty — both cases log identically.
                 console.warn(
                     `[matching_engine OVERRIDE] ignoreEmptyDeliveryEvidence=true used for brandId=${brandId}, ` +
                     `included creatorId=${creator.id} (${creatorName}) despite empty delivery_reliability_evidence`,
@@ -362,12 +384,6 @@ export async function matchCreatorsForBrand(brandId, roster = null, options = { 
         // N creators that needed loose-regex parsing. These are data-quality
         // issues that should be backfilled in Airtable.
         flags.push(`rate_range_parsed_loose_count_${looseParsedCount}`);
-    }
-    if (malformedCount > 0) {
-        // High N indicates schema drift on the Influencer table — either
-        // pre-Brief-7b records that haven't been backfilled, or new records
-        // created without the four required underwriting fields.
-        flags.push(`malformed_records_count_${malformedCount}`);
     }
 
     return { matches, rejected, flags };
