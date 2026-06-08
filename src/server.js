@@ -10,6 +10,9 @@ import fs from 'fs';
 import { releasePayout, createInvoices } from './skills/payment_handler.js';
 import { generateContracts } from './skills/contract_generator.js';
 import { dealsTable, influencersTable, brandsTable, fetchRecords, updateRecord, createRecord } from './utils/airtable.js';
+// Brief 12: production outreach orchestration routes
+import { runOutreachBatchForBrand } from './skills/outreach_orchestration.js';
+import { sendOutreachDraft } from './skills/outreach_send.js';
 import { logActivity } from './utils/logger.js';
 import { getTrackingInfo, updateTrackingInfo } from './utils/tracker.js';
 import { getParentNiche, getChildNiches, getParentLabel } from './utils/niches.js';
@@ -751,10 +754,59 @@ app.post('/api/approve_action', async (req, res) => {
 });
 
 // ------------------------------------------------------------------
+// Brief 12: Production Outreach Orchestration routes
+// ------------------------------------------------------------------
+
+// POST /api/outreach/batch
+// Runs match → score → LLM-generate → persist cycle for a brand.
+// Body: { brandId: string, options?: { topN?: number, ignoreEmptyDeliveryEvidence?: boolean } }
+// Returns the full batch result including draftsCreated array and per-creator errors.
+// Note: ignoreEmptyDeliveryEvidence is a test-only option (see matching_engine.js Stage 4).
+// It must NEVER be set to true in production dashboard calls.
+app.post('/api/outreach/batch', async (req, res) => {
+    const { brandId, options } = req.body;
+    if (!brandId || typeof brandId !== 'string') {
+        return res.status(400).json({ error: 'brandId required (string)' });
+    }
+    try {
+        const result = await runOutreachBatchForBrand(brandId, options ?? {});
+        res.json(result);
+    } catch (err) {
+        console.error(`[POST /api/outreach/batch] failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/outreach/send/:draftId
+// Operator-triggered send for a single OutreachDraft (status must be pending_review).
+// Returns success:true with sendgridMessageId on success.
+// Returns success:false (HTTP 200) on SendGrid failure — dashboard renders failure state.
+// Returns HTTP 400 on hard errors (draft not found, wrong status, brand not found).
+app.post('/api/outreach/send/:draftId', async (req, res) => {
+    const { draftId } = req.params;
+    if (!draftId || typeof draftId !== 'string') {
+        return res.status(400).json({ error: 'draftId required in path' });
+    }
+    try {
+        const result = await sendOutreachDraft(draftId);
+        // Both success and failure return HTTP 200 — the dashboard reads result.success
+        // to determine which state to render. SendGrid failures are known outcomes,
+        // not unhandled exceptions; the dashboard needs the failure detail.
+        res.json(result);
+    } catch (err) {
+        // Hard errors (draft not found, status invalid, brand not found) — these are 4xx.
+        // The client can read err.message to surface the specific reason to the operator.
+        console.error(`[POST /api/outreach/send/${draftId}] failed: ${err.message}`);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
 // Start
 // ------------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Broker Dashboard → http://localhost:${PORT}`);
-    console.log(`   Stripe Webhook endpoint  → POST /webhooks/stripe`);
-    console.log(`   PandaDoc Webhook endpoint → POST /webhooks/pandadoc`);
+    console.log(`   Stripe Webhook endpoint     → POST /webhooks/stripe`);
+    console.log(`   PandaDoc Webhook endpoint   → POST /webhooks/pandadoc`);
+    console.log(`   Brief 12 Outreach routes    → POST /api/outreach/batch | POST /api/outreach/send/:draftId`);
 });

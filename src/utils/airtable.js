@@ -15,6 +15,7 @@ export const influencersTable = base('Influencers');
 export const brandsTable = base('Brands');
 export const dealsTable = base('Deals');
 export const webhookEventsTable = base('WebhookEvents');
+export const outreachDraftsTable = base('OutreachDrafts');  // Brief 12 — Brief 7d verified this table exists with all 26 fields
 
 export async function fetchRecords(table, filterFormula = '') {
     try {
