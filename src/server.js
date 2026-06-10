@@ -19,6 +19,7 @@ import { getParentNiche, getChildNiches, getParentLabel } from './utils/niches.j
 import multer from 'multer';
 import { verifyInboundSignature } from './utils/sendgrid_signature.js';
 import { processInboundEmail } from './skills/negotiation_handler.js';
+import { extractHeaders } from './lib/email_headers.js'; // Brief 13: In-Reply-To / References extraction
 import { Readable } from 'stream';
 import { pandaDocClient } from './utils/pandadoc_client.js';
 import { logError, Tiers } from './utils/errorHandler.js';
@@ -316,6 +317,12 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
             return res.status(200).send();
         }
 
+        // Brief 13: extract In-Reply-To and References headers for draft reply-matching
+        const headersText = fields.headers ?? '';
+        const parsedHeaders = extractHeaders(headersText, ['In-Reply-To', 'References']);
+        const inReplyToHeader = parsedHeaders['in-reply-to'];
+        const referencesHeader = parsedHeaders['references'];
+
         try {
             // Identify sender
             const influencers = await fetchRecords(influencersTable, `{email} = '${senderEmail}'`);
@@ -323,11 +330,11 @@ app.post('/webhooks/sendgrid/inbound', express.raw({ type: '*/*', limit: '50mb' 
 
             if (influencers.length > 0 && brands.length > 0) {
                 console.warn(`Email ${senderEmail} matches both influencer and brand. Treating as influencer.`);
-                await processInboundEmail(influencers[0], textContent, 'influencer');
+                await processInboundEmail({ record: influencers[0], emailText: textContent, senderType: 'influencer', senderEmail, inReplyToHeader, referencesHeader });
             } else if (influencers.length > 0) {
-                await processInboundEmail(influencers[0], textContent, 'influencer');
+                await processInboundEmail({ record: influencers[0], emailText: textContent, senderType: 'influencer', senderEmail, inReplyToHeader, referencesHeader });
             } else if (brands.length > 0) {
-                await processInboundEmail(brands[0], textContent, 'brand');
+                await processInboundEmail({ record: brands[0], emailText: textContent, senderType: 'brand', senderEmail, inReplyToHeader, referencesHeader });
             } else {
                 logActivity('inbound_orphan', 'unknown', 'INBOUND_ORPHAN', 'NONE', 'NONE');
             }
