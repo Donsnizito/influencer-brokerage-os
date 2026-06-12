@@ -16,6 +16,8 @@ export const brandsTable = base('Brands');
 export const dealsTable = base('Deals');
 export const webhookEventsTable = base('WebhookEvents');
 export const outreachDraftsTable = base('OutreachDrafts');  // Brief 12 — Brief 7d verified this table exists with all 26 fields
+export const complianceEventsTable = base('ComplianceEvents');  // Brief 14 — operator creates table per Section B.1 (10 fields: event_id Autonumber, deal_id linked, event_type single-select, event_at created-time, event_payload long-text JSON, event_attachment attachment, event_source single-select, event_actor single-line, event_notes long-text, updated_at last-modified)
+export const unresolvedPaymentsTable = base('UnresolvedPayments');  // Brief 14 Pin 1 — durable surface for payment_intent.succeeded events with missing deal_id metadata (7 fields: payment_intent_id, stripe_event_id, customer_email, amount, received_at created-time, resolved_at date, resolution_notes long-text)
 
 export async function fetchRecords(table, filterFormula = '') {
     try {

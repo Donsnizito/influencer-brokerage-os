@@ -7,9 +7,9 @@ import crypto from 'crypto';
 import { findExistingEvent, recordReceive, markProcessed, markFailed } from './utils/webhook_idempotency.js';
 import { verifyPandaDocSignature } from './utils/pandadoc_signature.js';
 import fs from 'fs';
-import { releasePayout, createInvoices } from './skills/payment_handler.js';
+import { releasePayout, createInvoices, release20Percent, sendOperatorAlertForUnresolvedPayment } from './skills/payment_handler.js';
 import { generateContracts } from './skills/contract_generator.js';
-import { dealsTable, influencersTable, brandsTable, fetchRecords, updateRecord, createRecord } from './utils/airtable.js';
+import { dealsTable, influencersTable, brandsTable, complianceEventsTable, unresolvedPaymentsTable, fetchRecords, updateRecord, createRecord } from './utils/airtable.js';
 // Brief 12: production outreach orchestration routes
 import { runOutreachBatchForBrand } from './skills/outreach_orchestration.js';
 import { sendOutreachDraft } from './skills/outreach_send.js';
@@ -23,6 +23,8 @@ import { extractHeaders } from './lib/email_headers.js'; // Brief 13: In-Reply-T
 import { Readable } from 'stream';
 import { pandaDocClient } from './utils/pandadoc_client.js';
 import { logError, Tiers } from './utils/errorHandler.js';
+// Brief 14: compliance engine + lock pipeline
+import { validateLockedSpec, deriveDealState, checkDay30Eligibility } from './skills/compliance_engine.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
@@ -82,6 +84,16 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
                 console.log(`✅ Payment collected for Deal ${deal.id}`);
             }
         }
+
+        // ── Brief 14: lock pipeline triggered by payment_intent.succeeded ──
+        // Idempotency: generic via findExistingEvent('stripe', event.id) — inherited for free.
+        // Discovery (Pin 4): webhook_idempotency.js keys by Stripe event ID which is unique
+        // per event type instance. payment_intent.succeeded events have their own evt_xxx IDs.
+        if (event.type === 'payment_intent.succeeded') {
+            const result = await handleStripePaymentSucceeded(event);
+            console.log(`[stripe_webhook] payment_intent.succeeded result:`, result);
+        }
+
         await markProcessed(eventRecord);
     } catch (error) {
         await markFailed(eventRecord, error.message);
@@ -89,6 +101,138 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), async (r
 
     res.json({ received: true });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Brief 14: lock pipeline handler (payment_intent.succeeded)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Post-lock status set — any of these means the deal is already locked.
+ * Used for idempotency check in the lock pipeline.
+ */
+function isPostLockStatus(status) {
+    return ['LOCKED', 'CONTRACTS_SENT', 'CONTRACTS_SIGNED', 'CAMPAIGN_LIVE',
+            'DELIVERY_UPLOADED', 'DELIVERY_APPROVED', 'CAMPAIGN_COMPLETE', 'BREACH_FLAGGED'].includes(status);
+}
+
+/**
+ * Lock pipeline for payment_intent.succeeded events.
+ * Dual-path: CART_DRAFT and CAMPAIGN_APPROVED both transition identically.
+ *
+ * @param {Object} stripeEvent - Verified Stripe webhook event
+ * @returns {Promise<Object>} Result object describing what happened
+ */
+async function handleStripePaymentSucceeded(stripeEvent) {
+    const paymentIntent = stripeEvent.data.object;
+    const dealId = paymentIntent.metadata?.deal_id;
+
+    // Pin 1: no deal_id in metadata — fail loud with dual-surface recovery
+    if (!dealId) {
+        const customerEmail = paymentIntent.receipt_email ?? paymentIntent.customer ?? null;
+        const amount = paymentIntent.amount ?? 0;
+        const timestamp = new Date(stripeEvent.created * 1000).toISOString();
+
+        logError(Tiers.HIGH, 'stripe_webhook',
+            `payment_intent.succeeded with no deal_id metadata: PI=${paymentIntent.id} event=${stripeEvent.id} customer=${customerEmail} amount=${amount} ts=${timestamp}`,
+            { paymentIntentId: paymentIntent.id, stripeEventId: stripeEvent.id, customerEmail, amount, timestamp }
+        );
+
+        // Dual-surface recovery: durable record + immediate alert (Pin 1 requirement)
+        await sendOperatorAlertForUnresolvedPayment({
+            paymentIntentId: paymentIntent.id,
+            stripeEventId: stripeEvent.id,
+            customerEmail,
+            amount,
+            timestamp
+        });
+
+        return { processed: false, reason: 'no_deal_id_metadata' };
+    }
+
+    // Fetch the Deal record
+    const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
+    if (deals.length === 0) {
+        logError(Tiers.HIGH, 'stripe_webhook', `payment_intent.succeeded: deal not found: ${dealId}`, { paymentIntentId: paymentIntent.id });
+        return { processed: false, reason: 'deal_not_found' };
+    }
+    const deal = deals[0];
+
+    // Idempotency: already locked → return 200 immediately (Stripe dedup)
+    if (isPostLockStatus(deal.status)) {
+        logActivity('stripe_webhook', dealId, 'ALREADY_LOCKED', deal.status, deal.status);
+        console.log(`[stripe_webhook] Deal ${dealId} already in post-lock status (${deal.status}); ignoring duplicate webhook`);
+        return { processed: true, reason: 'already_locked', status: deal.status };
+    }
+
+    // Validate current status is a recognized pre-lock state
+    const preLockStates = ['CART_DRAFT', 'CAMPAIGN_APPROVED'];
+    if (!preLockStates.includes(deal.status)) {
+        // Invalid pre-lock state — log but return 200 so Stripe doesn't retry
+        logError(Tiers.HIGH, 'stripe_webhook',
+            `payment_intent.succeeded: deal ${dealId} in invalid pre-lock status: ${deal.status}`,
+            { paymentIntentId: paymentIntent.id }
+        );
+        return { processed: false, reason: 'invalid_pre_lock_status', status: deal.status };
+    }
+
+    // Parse and validate compliance_spec
+    let workingSpec;
+    try {
+        workingSpec = JSON.parse(deal.compliance_spec ?? '{}');
+    } catch (err) {
+        logError(Tiers.HIGH, 'stripe_webhook', `deal ${dealId} has malformed compliance_spec`, { error: err.message });
+        return { processed: false, reason: 'malformed_working_spec' };
+    }
+
+    const validation = validateLockedSpec(workingSpec);
+    if (!validation.valid) {
+        // CRITICAL: brand paid but spec is invalid. Mark deal BREACH_FLAGGED for operator resolution.
+        logError(Tiers.HIGH, 'stripe_webhook',
+            `deal ${dealId} spec invalid at lock: ${validation.errors.join(', ')}`,
+            { paymentIntentId: paymentIntent.id, errors: validation.errors }
+        );
+        await updateRecord(dealsTable, dealId, { status: 'BREACH_FLAGGED' });
+        return { processed: false, reason: 'spec_validation_failed', errors: validation.errors };
+    }
+
+    // ── Transition to LOCKED: freeze spec + create payout schedule ──
+    const total = workingSpec.payout_terms.total_creator_payout_amount;
+    const split80 = workingSpec.payout_terms.split_80_amount;
+    const split20 = workingSpec.payout_terms.split_20_amount;
+
+    await updateRecord(dealsTable, dealId, {
+        status: 'LOCKED',
+        compliance_spec: JSON.stringify(workingSpec), // explicit write signals immutability from this point
+        creator_payout_schedule: JSON.stringify({
+            total_payout_to_creator: total,
+            split_80_amount: split80,
+            split_20_amount: split20,
+            split_80_released_at: null,
+            split_80_stripe_transfer_id: null,
+            split_20_released_at: null,
+            split_20_stripe_transfer_id: null,
+            compliance_hold: false
+        })
+    });
+
+    logActivity('stripe_webhook', dealId, 'DEAL_LOCKED', deal.status, 'LOCKED');
+    console.log(`[stripe_webhook] Deal ${dealId} locked (${deal.status} → LOCKED)`);
+
+    // ── Generate contracts ──
+    try {
+        const contractResult = await generateContracts(dealId);
+        console.log(`[stripe_webhook] Contracts generated for Deal ${dealId}:`, contractResult);
+
+        await updateRecord(dealsTable, dealId, { status: 'CONTRACTS_SENT' });
+        logActivity('stripe_webhook', dealId, 'CONTRACTS_SENT', 'LOCKED', 'CONTRACTS_SENT');
+
+        return { processed: true, locked: true, contracts_generated: true, deal_id: dealId };
+    } catch (err) {
+        logError(Tiers.HIGH, 'stripe_webhook', `Contract generation failed for Deal ${dealId}: ${err.message}`, { error: err.message });
+        // Deal is LOCKED but contracts didn't generate. Operator must manually invoke /api/generate_contracts.
+        return { processed: true, locked: true, contracts_generated: false, error: err.message, deal_id: dealId };
+    }
+}
 
 // ------------------------------------------------------------------
 // PandaDoc Webhook
@@ -133,6 +277,12 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
         return res.status(200).send('Payload not an array - ignored');
     }
 
+    // ── Brief 14 extension: PandaDoc recipient_completed → ComplianceEvent ──
+    // Idempotency: dual-layer
+    //   Layer 1: WebhookEvents dedup (above, keyed by ${docId}|${docStatus}|${dateModified})
+    //   Layer 2: ComplianceEvents existence check (below — prevents double-write across retries)
+    // Discovery (Pin 4): PandaDoc recipient_completed events have their own dateModified
+    // per signer action, generating unique hashes. Dual-layer idempotency is belt-and-suspenders.
     for (const evt of parsed) {
         const { event, data } = evt;
         const docId = data?.id || '';
@@ -164,46 +314,100 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
                     await markProcessed(eventRecord, 'No doc ID in payload');
                     continue;
                 }
-                
+
                 const deals = await fetchRecords(dealsTable, `SEARCH('${docId}', pandadoc_doc_id) > 0`);
                 if (deals.length === 0) {
                     await markProcessed(eventRecord, `No deal found for doc ${docId}`);
                     continue;
                 }
                 const deal = deals[0];
-                
+
                 if (docStatus === 'document.completed') {
-                    await updateRecord(dealsTable, deal.id, {
-                        status: 'CONTRACT_SIGNED',
-                        contract_signed_date: new Date().toISOString().split('T')[0]
-                    });
-                    logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
-                    await markProcessed(eventRecord, `Deal ${deal.id} marked CONTRACT_SIGNED`);
-                    setImmediate(async () => {
-                        try {
-                            await createInvoices();
-                        } catch (err) {
-                            logError(Tiers.HIGH, 'background_invoice', 'Invoice creation failed', { error: err.message });
+                    // Brief 14 extension: determine which party completed (brand or creator)
+                    // by checking pandadoc_brand_document_id / pandadoc_creator_document_id
+                    // fields written by contract_generator.js (E.3-α lookup).
+                    let signatureEventType = null;
+                    if (deal.pandadoc_brand_document_id === docId) {
+                        signatureEventType = 'contract_signed_brand';
+                    } else if (deal.pandadoc_creator_document_id === docId) {
+                        signatureEventType = 'contract_signed_creator';
+                    }
+                    // Fallback: if individual doc IDs not yet written (pre-Brief-14 deals),
+                    // use the legacy CONTRACT_SIGNED path without ComplianceEvent.
+
+                    if (signatureEventType) {
+                        // Layer 2 idempotency: check ComplianceEvents table before writing
+                        const existingSignature = await fetchRecords(
+                            complianceEventsTable,
+                            `AND({deal_id} = '${deal.id}', {event_type} = '${signatureEventType}')`
+                        );
+                        if (existingSignature.length === 0) {
+                            await complianceEventsTable.create([{
+                                fields: {
+                                    deal_id: [deal.id],
+                                    event_type: signatureEventType,
+                                    event_payload: JSON.stringify({ pandadoc_document_id: docId, pandadoc_status: docStatus }),
+                                    event_source: 'system_derived',
+                                    event_actor: 'pandadoc_webhook',
+                                    event_notes: `Signed via PandaDoc; document ${docId}`
+                                }
+                            }]);
+                            console.log(`[pandadoc_webhook] ${signatureEventType} ComplianceEvent written for Deal ${deal.id}`);
                         }
-                    });
+
+                        // Check if both parties have now signed → CONTRACTS_SIGNED
+                        // [K.7 CLEANUP CANDIDATE] — we write both CONTRACT_SIGNED (legacy field,
+                        // pre-Brief-14 dashboard rendering dependency) and CONTRACTS_SIGNED (new enum).
+                        // Cleanup trigger: verify all downstream consumers (dashboard rendering,
+                        // contracts tab, audit queries) read CONTRACTS_SIGNED, then remove CONTRACT_SIGNED
+                        // writes. Origin: Brief 14 commit. Reference: see also K.6 (status enum coexistence).
+                        const allSignatures = await fetchRecords(
+                            complianceEventsTable,
+                            `AND({deal_id} = '${deal.id}', OR({event_type} = 'contract_signed_brand', {event_type} = 'contract_signed_creator'))`
+                        );
+                        if (allSignatures.length >= 2) {
+                            await updateRecord(dealsTable, deal.id, {
+                                status: 'CONTRACTS_SIGNED',    // new canonical enum (Brief 14)
+                                contract_state: 'SIGNED',      // existing field preserved for legacy dashboard
+                                contract_signed_date: new Date().toISOString().split('T')[0]
+                            });
+                            logActivity('contract_generator', deal.id, 'BOTH_CONTRACTS_SIGNED', 'CONTRACTS_SENT', 'CONTRACTS_SIGNED');
+                            console.log(`[pandadoc_webhook] Both signatures received for Deal ${deal.id}; status → CONTRACTS_SIGNED`);
+                        }
+                    } else {
+                        // Legacy path: individual doc IDs not present — use old CONTRACT_SIGNED transition
+                        await updateRecord(dealsTable, deal.id, {
+                            status: 'CONTRACT_SIGNED',
+                            contract_signed_date: new Date().toISOString().split('T')[0]
+                        });
+                        logActivity('contract_generator', deal.id, 'CONTRACT_SIGNED', 'CONTRACT_SENT', 'CONTRACT_SIGNED');
+                        setImmediate(async () => {
+                            try {
+                                await createInvoices();
+                            } catch (err) {
+                                logError(Tiers.HIGH, 'background_invoice', 'Invoice creation failed', { error: err.message });
+                            }
+                        });
+                    }
+                    await markProcessed(eventRecord, `Deal ${deal.id} signature event processed`);
                     continue;
                 }
-                
+
                 if (docStatus === 'document.draft') {
                     if (deal.contract_state !== 'DRAFTING') {
                         await markProcessed(eventRecord, `Deal ${deal.id} not in DRAFTING state (was ${deal.contract_state})`);
                         continue;
                     }
-                    
+
                     try {
                         await pandaDocClient.post(`/documents/${docId}/send`, { silent: false });
                         logActivity('contract_generator', deal.id, 'DRAFT_SENT', 'DRAFTING', 'SENT');
-                        
+
                         const allDocIds = deal.pandadoc_doc_id.split(',').map(s => s.trim());
                         const sentDocs = (deal.contract_docs_sent || '').split(',').filter(s => s);
                         sentDocs.push(docId);
                         const allSent = allDocIds.every(id => sentDocs.includes(id));
-                        
+
                         if (allSent) {
                             await updateRecord(dealsTable, deal.id, {
                                 contract_state: 'SENT',
@@ -217,16 +421,16 @@ app.post('/webhooks/pandadoc', express.raw({ type: 'application/json' }), async 
                                 contract_docs_sent: sentDocs.join(',')
                             });
                         }
-                        
+
                         await markProcessed(eventRecord, `Doc ${docId} sent for Deal ${deal.id}`);
                     } catch (err) {
                         await markFailed(eventRecord, `Send failed for doc ${docId}: ${err.message}`);
                         logError(Tiers.HIGH, 'contract_generator', `Failed to send doc ${docId}`, { error: err.message });
                     }
-                    
+
                     continue;
                 }
-                
+
                 await markProcessed(eventRecord, `Unhandled status: ${docStatus}`);
                 continue;
             } else {
@@ -809,11 +1013,156 @@ app.post('/api/outreach/send/:draftId', async (req, res) => {
 });
 
 // ------------------------------------------------------------------
+// Brief 14: 20% release endpoint (operator-triggered)
+// ------------------------------------------------------------------
+
+// POST /api/deals/:dealId/release-20-percent
+// Operator-triggered. Verifies day-30 eligibility and compliance status
+// before firing the 20% Stripe transfer.
+// Returns 200 with { eligible, reason } if not yet eligible (not an error).
+// Returns 200 with { released, amount } on success.
+app.post('/api/deals/:dealId/release-20-percent', async (req, res) => {
+    const { dealId } = req.params;
+    if (!dealId) return res.status(400).json({ error: 'dealId required in path' });
+
+    try {
+        const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
+        if (deals.length === 0) return res.status(404).json({ error: 'Deal not found' });
+        const deal = deals[0];
+
+        const events = await fetchRecords(complianceEventsTable, `{deal_id} = '${dealId}'`);
+        const eligibility = checkDay30Eligibility(deal, events);
+
+        if (!eligibility.eligible) {
+            return res.json({
+                released: false,
+                eligible: false,
+                reason: eligibility.reason,
+                daysRemaining: eligibility.daysRemaining
+            });
+        }
+
+        const result = await release20Percent(dealId);
+        res.json({ released: result.released, amount: result.amount, transferId: result.transferId });
+    } catch (err) {
+        console.error(`[POST /api/deals/${dealId}/release-20-percent] failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// Brief 14: compliance read endpoints (consumed by Brief 15 dashboards,
+// Brief 15d Lara, Brief 16 equivalence test)
+// ------------------------------------------------------------------
+
+// GET /api/deals/:dealId/compliance-status
+// Calls deriveDealState() and returns the derived compliance state.
+// No writes. Pure read.
+app.get('/api/deals/:dealId/compliance-status', async (req, res) => {
+    const { dealId } = req.params;
+    try {
+        const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
+        if (deals.length === 0) return res.status(404).json({ error: 'Deal not found' });
+        const deal = deals[0];
+
+        const events = await fetchRecords(complianceEventsTable, `{deal_id} = '${dealId}'`);
+        const state = deriveDealState(deal, events);
+        res.json({ deal_id: dealId, ...state });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/deals/:dealId/payout-schedule
+// Returns the parsed creator_payout_schedule JSON for a deal.
+app.get('/api/deals/:dealId/payout-schedule', async (req, res) => {
+    const { dealId } = req.params;
+    try {
+        const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
+        if (deals.length === 0) return res.status(404).json({ error: 'Deal not found' });
+        const deal = deals[0];
+
+        let schedule = null;
+        try {
+            schedule = JSON.parse(deal.creator_payout_schedule ?? 'null');
+        } catch (e) {
+            return res.status(500).json({ error: 'creator_payout_schedule is malformed JSON' });
+        }
+
+        res.json({ deal_id: dealId, schedule });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/deals/:dealId/compliance-events
+// Returns all ComplianceEvents for a deal, ordered by creation.
+app.get('/api/deals/:dealId/compliance-events', async (req, res) => {
+    const { dealId } = req.params;
+    try {
+        const events = await fetchRecords(complianceEventsTable, `{deal_id} = '${dealId}'`);
+        res.json({ deal_id: dealId, events, count: events.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/deals/:dealId/compliance-spec
+// Returns the parsed compliance_spec JSON for a deal.
+// Separate from /api/deals because the spec JSON can be large and is
+// consumed independently by PandaDoc rendering, Brief 15b brand portal,
+// Brief 15c creator portal, and Brief 16 equivalence test.
+app.get('/api/deals/:dealId/compliance-spec', async (req, res) => {
+    const { dealId } = req.params;
+    try {
+        const deals = await fetchRecords(dealsTable, `RECORD_ID() = '${dealId}'`);
+        if (deals.length === 0) return res.status(404).json({ error: 'Deal not found' });
+        const deal = deals[0];
+
+        let spec = null;
+        try {
+            spec = JSON.parse(deal.compliance_spec ?? 'null');
+        } catch (e) {
+            return res.status(500).json({ error: 'compliance_spec is malformed JSON' });
+        }
+
+        res.json({ deal_id: dealId, locked: isPostLockStatus(deal.status), spec });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// Brief 14 Pin 1: unresolved payments read endpoint
+// Consumed by Brief 15 operator dashboard to surface the recovery queue.
+// ------------------------------------------------------------------
+
+// GET /api/unresolved-payments
+// Returns all records in the UnresolvedPayments table (unresolved and resolved).
+// Brief 15 dashboard will filter by resolved_at = null to surface open queue.
+app.get('/api/unresolved-payments', async (req, res) => {
+    try {
+        const records = await fetchRecords(unresolvedPaymentsTable);
+        const open = records.filter(r => !r.resolved_at);
+        const resolved = records.filter(r => r.resolved_at);
+        res.json({ open, resolved, total: records.length });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
 // Start
 // ------------------------------------------------------------------
 app.listen(PORT, () => {
     console.log(`🚀 Broker Dashboard → http://localhost:${PORT}`);
-    console.log(`   Stripe Webhook endpoint     → POST /webhooks/stripe`);
-    console.log(`   PandaDoc Webhook endpoint   → POST /webhooks/pandadoc`);
-    console.log(`   Brief 12 Outreach routes    → POST /api/outreach/batch | POST /api/outreach/send/:draftId`);
+    console.log(`   Stripe Webhook endpoint       → POST /webhooks/stripe`);
+    console.log(`   PandaDoc Webhook endpoint     → POST /webhooks/pandadoc`);
+    console.log(`   Brief 12 Outreach routes      → POST /api/outreach/batch | POST /api/outreach/send/:draftId`);
+    console.log(`   Brief 14 Compliance routes    → GET  /api/deals/:dealId/compliance-status`);
+    console.log(`                                 → GET  /api/deals/:dealId/payout-schedule`);
+    console.log(`                                 → GET  /api/deals/:dealId/compliance-events`);
+    console.log(`                                 → GET  /api/deals/:dealId/compliance-spec`);
+    console.log(`                                 → POST /api/deals/:dealId/release-20-percent`);
+    console.log(`   Brief 14 Unresolved Payments  → GET  /api/unresolved-payments`);
 });
