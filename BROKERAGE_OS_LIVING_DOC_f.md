@@ -11,7 +11,7 @@
 > - `[DECISION]` — a strategic/engineering decision locked by the operator
 > - `[OPEN]` — unresolved, needs a decision or verification
 >
->**Last updated:** 2026-06-12 (Brief 14 done — match-lock → contract handoff shipped: `compliance_engine.js` (pure derivation, validateLockedSpec + deriveDealState + checkDay30Eligibility), `contract_generator.js` (extended, dual-path: dealId-targeted + legacy batch-poll), `payment_handler.js` (extended: release80Percent + release20Percent + sendOperatorAlertForUnresolvedPayment), `server.js` (Stripe lock pipeline: payment_intent.succeeded → validate spec → LOCKED → contracts; PandaDoc: recipient_completed → ComplianceEvent; 5 new compliance read endpoints + release-20-percent endpoint + unresolved-payments endpoint), `airtable.js` (complianceEventsTable + unresolvedPaymentsTable exports), `docs/compliance_spec_schema.md` (NEW — schema integration contract), `docs/pandadoc_merge_tokens.md` (NEW — PandaDoc token naming convention), `scripts/verify_brief14_schema.mjs` (NEW — pre-launch schema check). Operator schema migrations required before first live deal: create ComplianceEvents table (10 fields) + UnresolvedPayments table (7 fields) + add pandadoc_brand_document_id + pandadoc_creator_document_id to Deals. Brief 15 next.)
+>**Last updated:** 2026-06-12-supplement (Brief 14-Supplement done — doc-only architectural precision recovery: §0.5.A (Product Surface Architecture), §0.5.1 (Planner/Executor Doctrine), §4.6 (Brand Experience Stages — Acquisition Flow), §4.7 (Returning-Brand Continuous Campaign Lifecycle with Lara definition), §4.8 (Creator-Side Lifecycle with deliverable upload flow), §4.4 Deal state machine extended (CAMPAIGN_DRAFT + CAMPAIGN_APPROVED dual-path pre-lock). All five sections locked as canonical references for Briefs 15, 15b, 15c, 15d, 16. Brief 15 next.)
 
 ---
 
@@ -73,6 +73,111 @@ The brokerage sells: **enforced execution between brand and creator, with bounde
 Every architectural decision downstream of this definition must be checked against it. If a feature does not serve the enforcement function — or worse, makes the enforcement function less visible to the parties paying for it — it does not belong in the system regardless of how interesting it is.
 
 This definition emerged through the 2026-05-30 strategic stress-test (see §2.2 and Changelog 2026-05-30) and is the unifying frame that the §2 strategy mechanisms now serve. The mechanisms (intelligence-led outreach, curated roster, operator confirmation, deal-range doctrine) all pre-existed this frame; this frame explains what they are *for*.
+
+### 0.5.A Product Surface Architecture (locked 2026-06-12 supplement)
+
+§0.5 defines what the brokerage IS economically and structurally — a dual-contract enforcement system, monetizing the function of being the credible enforcement layer at $5–15K. That definition is unchanged and bedrock.
+
+§0.5.A defines what the brokerage looks like to the user. The two layers must be understood together:
+
+**Layer 1 — Economic identity (§0.5, unchanged):** dual-contract enforcement system. Brokerage economics. 15% fee. Trust stack from §2.2 (H1 curation as underwriting, H2 institutional visibility, H3 bounded guarantee). The function this brokerage monetizes.
+
+**Layer 2 — Product surface (§0.5.A, this section):** the user-facing experience is software, not service. Brands experience: structured campaign intake, AI-matched creator recommendations, automated negotiation, contract execution, compliance tracking, payout release, lifecycle querying via Lara. The operator runs the system; the system performs the brokerage function. The product surface is AI-driven SaaS-shaped.
+
+**Why both layers matter:**
+
+- The function (§0.5) justifies the unit economics and the strategic moat (§2.2 trust stack). Without the enforcement function, the system has no economic survivability — it is competing as a creator marketplace, where margin is structurally compressed and the brokerage has no moat.
+- The product surface (§0.5.A) justifies the category positioning, the investor framing, and the frontend engineering direction. Without the product surface framing, downstream briefs treat the system as if it is a service that happens to have software around it, which produces sloppy frontend engineering — service-shaped UIs with brokerage workflow leakage rather than software-shaped UIs that abstract the brokerage work as invisible infrastructure.
+
+**Critical distinction for downstream briefs:**
+
+- Brief 15 (operator dashboard) is the surface where the operator *runs the system*. System-administration shaped, not deal-management shaped.
+- Brief 15b (brand portal/dashboard) is software, not service. Brands experience a product, not a relationship with a broker.
+- Brief 15c (creator portal) is software, not a creator-management interface. Creators experience workflow tooling, not a service relationship.
+- Brief 15d (AI support + escalation) is the structured trust substitute for founder visibility (Decision C). Lara is the natural-language routing surface; human escalation is the SLA-bound layer behind it.
+- Future Campaign Creation Interface brief (post-Brief 16) is the planner surface for returning brands. It looks like AI software (chat-style intake + contextual conversation) but is structurally a planner that produces structured outputs for the executor pipeline.
+
+**What this distinction does NOT change:**
+
+- The §0.5 economic definition is unchanged.
+- The §2.2 trust stack is unchanged.
+- The §2.3 (Decision A) bounded guarantee is unchanged.
+- The §2.4 (Decision B) deal-framework-first portal architecture is unchanged.
+- The §2.5 (Decision C) institutional visibility framing is unchanged.
+- The §2.6 (Decision D) 80/20 creator payout is unchanged.
+- The §2.7 (Decision E) process-ownership funnel is unchanged.
+- The §0.6 governance doctrine is unchanged.
+
+The product surface framing sits on top of the function. It does not replace the function. Frontend engineering reads §0.5.A to understand what shape to build. Strategic decisions read §0.5 to understand what shape the function must hold.
+
+**Comparison framing (for positioning, not lifted into brand-facing copy):**
+
+Uber is a logistics + routing + marketplace system that replaces human dispatching. Internally it is still a transportation-economics business; the surface is software. Users do not care what the system "is" categorically — but investors and category positioning do. The brokerage is structurally analogous: an AI campaign-creation + matching + enforcement system that replaces human deal-brokering. Internally still brokerage economics; surface-wise software. Internal team thinks in Layer 1 terms; external positioning leads with Layer 2.
+
+### 0.5.1 Planner / Executor Doctrine (locked 2026-06-12 supplement)
+
+The system has two functional roles that must never be mixed in implementation. This is architectural doctrine, not implementation detail — mixing the two produces a category of failure where LLM-driven reasoning silently triggers state changes, which is exactly the failure mode §0.2 doctrine warns against.
+
+**Planner — produces structured outputs, no side effects.**
+
+The planner reads structured input from the user, augments with LLM intelligence, outputs structured recommendations. Specifically:
+
+- Reads from Airtable, web search, and other read-only data sources
+- Augments the read context with LLM reasoning
+- Produces structured outputs: campaign briefs, creator recommendations, performance projections, contextual insights
+- Token-bounded — known cost ceiling per planner invocation (same discipline as Brief 9b outreach engine with its 5-6 link search cap)
+- Deterministic-ish where possible — same input shape should produce similar output shape
+- **Read-only on Airtable.** Cannot write records. Cannot trigger state changes.
+- Cannot invoke executor functions
+
+Planner examples (existing and future):
+- Brief 9b's `outreach_engine.js` — produces structured outreach drafts from brand+creator context (technically does write, but writes only to OutreachDrafts as draft records, which are pre-decision artifacts; downstream executor decides whether to send)
+- Future Campaign Creation Interface (post-Brief 16) — Mode 1 structured intake + Mode 2 contextual conversation (see §4.7)
+
+**Executor — acts on structured inputs to produce real outcomes, has side effects.**
+
+The executor consumes structured inputs (campaign briefs, locked compliance_specs, OutreachDrafts, ComplianceEvents) and acts on them. Specifically:
+
+- Reads structured inputs from planner outputs and from existing state
+- Writes to Airtable. Triggers Stripe transfers. Generates PandaDoc contracts. Sends emails via SendGrid. Modifies state.
+- Has side effects. Every executor call may change the real world (money moves, contracts ship, emails fire)
+- **Cannot invoke planner functions during execution.** Executor logic is deterministic and does not reason via LLM during the act of executing
+
+Executor examples:
+- Brief 10's `matching_engine.js` — pure deterministic match logic
+- Brief 11's `scoring_engine.js` — pure deterministic scoring
+- Brief 12's `outreach_orchestration.js` and `outreach_send.js` — orchestrates outreach generation and send pipeline
+- Brief 13's `negotiation_handler.js` — classifies replies and writes correlation data
+- Brief 14's `compliance_engine.js` + `contract_generator.js` + `payment_handler.js` — locks deals, generates contracts, releases payouts, derives compliance state
+
+**The rule: planner never invokes executor functions directly. Executor never invokes planner functions. They communicate only through structured documents.**
+
+The structured document is the integration contract:
+
+- Planner produces a campaign brief → executor reads the brief
+- Planner recommends creators → executor writes OutreachDrafts based on operator approval of recommendations
+- Executor locks a deal → planner reads the locked compliance_spec for downstream contextual insights
+- Executor records ComplianceEvents → planner reads events to produce status summaries for contextual conversation
+
+**Why this matters:**
+
+Mixing planner and executor produces systems where LLM-driven reasoning silently triggers state changes. Example: a planner that "recommends" a creator and then writes to Airtable on the recommendation directly. This makes LLM hallucination a state-mutation risk. The architectural separation is: planner recommends → operator (or rule) approves → executor acts. The approval gate is the chokepoint where human or deterministic judgment intervenes between AI reasoning and state mutation.
+
+This is the same discipline as §0.2's "human review is the verification step." The planner/executor split formalizes it as architecture, not just process.
+
+**Doctrine implications for downstream briefs:**
+
+- Brief 15b (brand dashboard): the Launch Campaign tab is a planner surface (produces campaign briefs, recommends creators, generates projections). It does NOT execute the deal lifecycle. Approval moves the planner output into the executor pipeline (Brief 14's lock flow).
+- Brief 15d (Lara): Lara is a planner-shaped routing surface (reads state, produces natural-language answers). She does not execute state changes directly — when escalation is needed, she hands off to the operator (human) who is the executor.
+- Future Campaign Creation Interface: explicitly two-mode (Mode 1 structured intake = planner; Mode 2 contextual conversation = planner with read-only LLM). Both modes are planner-shaped. Approval transitions to executor (Brief 14 lock pipeline).
+- Future learning loop (Brief 19+): reads executor-produced data (OutreachDrafts edits, reply outcomes), proposes prompt revisions for operator review. Operator review is the approval gate. The learning loop never auto-modifies prompt artifacts.
+
+**What this doctrine forbids:**
+
+- LLM-driven autonomous state changes (e.g., AI agent that books a deal)
+- Planner functions that write to Airtable beyond pre-decision artifacts
+- Executor functions that invoke LLM during execution (deterministic only)
+- "AI agents" in the autonomous-action sense — the system uses LLMs as routing and reasoning layers, never as autonomous actors
 
 ### 0.6 BROKERAGE GOVERNANCE DOCTRINE (locked 2026-05-30)
 
@@ -461,12 +566,16 @@ Object keyed by parent (NOT an array — see §6 bugs). 6 parents, 20 leaf sub-n
 ```
 Test niches map: `ai_tech`,`ai_saas` → `tech_software`; `pets` → `family_home`.
 
-### 4.4 Full status state machine `[VERBATIM/REPORT-confirmed, extended Brief 14]`
+### 4.4 Full status state machine `[VERBATIM/REPORT-confirmed, extended Brief 14 + Brief 14-supplement]`
 - **Influencer:** `INFLUENCER_DISCOVERED` → `QUOTE_REQUESTED` → `QUOTE_RECEIVED` → `DEAL_INITIATED`. Also `COLD`, `INVALID_EMAIL`, `BOUNCED`. **Cross-cutting:** `roster_eligibility` enum tracks supply-side standing independent of status (Decision D / Brief 7b).
 - **Brand:** `BRAND_COLD` → `BRAND_PITCHED` → `INTERESTED` → (deal-framework portal entry → roster select) → `DEAL_INITIATED`. Also `ROSTER_DECLINED`, `INVALID_EMAIL`, `BOUNCED`.
-- **Deal (post-Brief-14 canonical state machine):**
-  - `CART_DRAFT` (brand-portal checkout, pre-payment) → **`payment_intent.succeeded`** Stripe webhook → `LOCKED` (spec frozen, payout schedule initialized) → `CONTRACTS_SENT` (both PandaDoc docs generated and sent) → `CONTRACTS_SIGNED` (both parties signed; each signature writes a ComplianceEvent) → `INVOICE_SENT` → `PAYMENT_COLLECTED` → `DELIVERY_UPLOADED` → `DELIVERY_APPROVED` (operator approves, triggers 80% release) → `CAMPAIGN_LIVE` → (compliance window day 0-30) → `PAYOUT_20_RELEASED` (operator confirms day-30, triggers 20% release) → `CAMPAIGN_COMPLETE` (day 90).
-  - `BREACH_FLAGGED` — entered if `validateLockedSpec()` fails post-payment. Operator must resolve before re-triggering the pipeline.
+- **Deal (post-Brief-14 canonical state machine, dual-path pre-lock):**
+  - **Acquisition path (first deal per brand):** `CART_DRAFT` (Selection Cart entry, §4.6 Stage A3, pre-payment, brand may be unauthenticated) → `payment_intent.succeeded` Stripe webhook → `LOCKED`
+  - **Continuous path (returning brand subsequent campaigns):** `CAMPAIGN_DRAFT` (Campaign Creation Interface Mode 1 output composed, brand reviewing in Mode 2, §4.7 Stage P3-P4) → `CAMPAIGN_APPROVED` (brand approved recommendations, awaiting payment, §4.7 Stage P5) → `payment_intent.succeeded` Stripe webhook → `LOCKED`
+  - **Both paths converge at LOCKED.** The lock pipeline handles both transitions identically. The pre-lock state is metadata about which flow produced the deal; lock pipeline behavior is path-agnostic.
+  - **Post-lock (unified for both paths):** `LOCKED` (spec frozen, payout schedule initialized) → `CONTRACTS_SENT` (both PandaDoc docs generated and sent) → `CONTRACTS_SIGNED` (both parties signed; each signature writes a ComplianceEvent) → `INVOICE_SENT` → `PAYMENT_COLLECTED` → `DELIVERY_UPLOADED` (creator uploads via §4.8 creator dashboard) → `DELIVERY_APPROVED` (operator approves, triggers 80% release) → `CAMPAIGN_LIVE` → (compliance window day 0-30) → `PAYOUT_20_RELEASED` (operator confirms day-30, triggers 20% release) → `CAMPAIGN_COMPLETE` (day 90).
+  - `BREACH_FLAGGED` — entered if `validateLockedSpec()` fails post-payment, OR if a `delivery_rejected` or `breach_report` ComplianceEvent fires post-lock. Operator must resolve before pipeline progression continues.
+  - `CANCELLED` — pre-lock cancellation. Both `CART_DRAFT` and `CAMPAIGN_DRAFT`/`CAMPAIGN_APPROVED` can transition to `CANCELLED` (cart abandoned, deal declined, brand changes mind pre-payment).
   - **[K.6 STATUS COEXISTENCE — see §6]:** Pre-Brief-14 pipeline used `DEAL_LOCKED` (now `LOCKED`), `CONTRACT_SIGNED` (now `CONTRACTS_SIGNED`), `CONTRACT_SENT` (now `CONTRACTS_SENT`). Both values are written in parallel during the transition period (see K.6/K.7 in §6 for cleanup criteria).
 - **Compliance-failure branches (Brief 14/15d):** at any point during the 90-day window, a compliance failure event (breach_report or delivery_rejected ComplianceEvent) flips `deriveDealState().status` to a breach value and triggers either (a) credit-and-replacement remediation (Decision A) which spawns a new linked deal, or (b) creator breach flagging (Decision D) which flips `roster_eligibility` to `flagged_breach`.
 
@@ -474,6 +583,369 @@ Test niches map: `ai_tech`,`ai_saas` → `tech_software`; `pets` → `family_hom
 `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, `SENDGRID_API_KEY`, `SENDGRID_WEBHOOK_PUBLIC_KEY`, `SENDGRID_VERIFY_STRICT=true`, `STRIPE_SECRET_KEY` (LIVE `sk_live_`), `STRIPE_WEBHOOK_SECRET` (live whsec_), `PANDADOC_API_KEY`, `PANDADOC_WEBHOOK_SECRET`, `PANDADOC_BRAND_TEMPLATE_ID=xp9DuLRJdUsP2fq64K8p3Y`, `PANDADOC_INFLUENCER_TEMPLATE_ID=YeJ2mEivMqaHeyEXUqawrn`, `PANDADOC_BRAND_ROLE=Signer`, `PANDADOC_INFLUENCER_ROLE=Signer`, `ANTHROPIC_API_KEY`, `OWNER_EMAIL=donj@wellsplusdaily.com`, `OPERATOR_NOTIFICATION_EMAIL=donj@wellsplusdaily.com`, `PUBLIC_SERVER_URL=https://influencer-brokerage-os.onrender.com`, `NEOMAIL_USER=` (blank), `NEOMAIL_PASS`. `PANDADOC_VERIFY_STRICT` not set (soft-fail OK). `APIFY_API_TOKEN` (added for lead_discovery, now superseded). Owns second domain `wellspluspartners.com` (for future domain split). `[OPEN — operator to note APOLLO_API_KEY when Apollo is added, Brief 17]`.
 
 **Planned additions (Brief 15b/15c/15d):** signed-URL secret(s) for brand portal and creator portal access; AI support assistant API key if separate from `ANTHROPIC_API_KEY`; escalation routing config (operator phone/email/SMS for off-hours alerting if any).
+
+### 4.6 Brand Experience Stages — Acquisition Flow (locked 2026-06-12 supplement)
+
+The first-deal acquisition flow is the journey a new brand takes from cold outreach response to live campaign. This is one-time per brand: returning brands launch subsequent campaigns through the continuous flow (§4.7), not by re-entering acquisition.
+
+This section is canonical for Brief 15b (brand portal full build) and Brief 16 (4-mock test exercising the full acquisition path). Frontend engineering reads this section to understand what surfaces exist at each stage and what data they render.
+
+**Visual direction (locked):** The brand-facing surfaces across acquisition and product layers borrow Ramp's UI patterns directly. Ramp Reporting → spending tracker tab. Ramp Bills → invoices tab with Stripe payment integration. Ramp Transaction detail → deal detail view with compliance/payout state. Visual consistency across operator dashboard (Brief 15), Kanban (Brief 15b acquisition), brand dashboard (Brief 15b product), and creator dashboard (Brief 15c).
+
+**Stage A1 — Landing (from outreach link)**
+
+- **Trigger:** Brand clicks the outreach link from a Brief 12 outreach email
+- **Authentication state:** unauthenticated
+- **Purpose:** confirm context, set expectation, establish premium framing
+- **What the brand sees:** a context-setting landing page that confirms the brokerage product framing. Brief copy explaining what this is (premium creator brokerage with enforcement layer, not a marketplace). The framing language must align with §0.5 product definition — this is the buyer's first encounter with the system and the framing must be consistent with the dual-contract enforcement positioning
+- **CTA:** "View creators" or equivalent commitment-light language → progresses to Stage A2
+- **Backend data dependencies:** brand record (from `roster_token` lookup), no creator data exposed yet
+- **What's NOT here:** no creator cards, no pricing, no compliance details. Stage A1 is framing-only
+
+**Stage A2 — Kanban (unauthenticated, two screens)**
+
+- **Authentication state:** unauthenticated
+- **Purpose:** product discovery layer — the brand encounters the curated creator set and the brokerage's compliance/guarantee framing
+- **Two screens (sequential):**
+
+  **Screen A2.1 — 15-second context video.** Explains: what the platform is, how creator selection works, what happens after selection. Production quality matters here; this is the brand's first encounter with the brokerage as a product. Video covers: dual-contract enforcement frame (in plain language), curation discipline as quality signal, 80/20 compliance window as the visible enforcement mechanism. After 15 seconds, brand progresses to Screen A2.2 (or skips ahead via CTA).
+
+  **Screen A2.2 — Main Kanban.** The creator cards surface. Each card contains:
+  - Creator's external proof (past sponsors, audience demographics, prior brand work in adjacent categories)
+  - Brief 11 scoring metadata translated to brand-facing display (compliance underwriting evidence: "delivered on time on N of last N sponsorships," "response window typically X hours," "completion rate N%")
+  - Brief 12 OutreachDrafts' `fit_rationale` and `evidence_used` rendered as buyer-facing reasoning (why this creator fits this brand)
+  - Compliance/guarantee framing at brokerage-template level (NOT per-deal yet — Stage A2 shows the brokerage's house template for how deals work, not a specific compliance_spec for a specific creator)
+
+- **User action:** select creator(s) → progresses to Stage A3
+- **Backend data dependencies:** brand record, Brief 11 scored creators for this brand (read from OutreachDrafts where brand_id = this brand), Brief 12 outreach drafts' rationale fields
+- **What's NOT here:** authentication, payment, specific pricing per creator, locked compliance_spec
+- **Why two screens, not one:** the 15-second video sets framing before the brand encounters inventory. Marketplace defaults lead with inventory; the brokerage leads with the structure that inventory sits inside (§2.4 / Decision B).
+
+**Stage A3 — Selection Cart (unauthenticated)**
+
+This is the transaction preview state — critical layer between discovery and authentication. NOT a dashboard. NOT a checkout. A commitment-ready preview that surfaces the deal shape before asking for payment.
+
+- **Authentication state:** unauthenticated
+- **Purpose:** transaction preview, allow brand to review their selection before committing to payment
+- **What the brand sees:**
+  - Selected creators (condensed cards from Stage A2 — preserve the rationale visible at selection time)
+  - Pricing estimate / range (computed from creator rate ranges + Brief 11 scoring metadata)
+  - Small campaign summary (deliverables shape, timeline estimate)
+  - **LLM insights on potential performance** — a paragraph-length contextual projection of how the campaign might perform. This is a planner output (per §0.5.1) — token-bounded LLM call producing structured performance projection from creator data + brand context. Same architectural pattern as Brief 9b's outreach engine. No back-and-forth dialogue at this stage (Stage A3 LLM is single-pass output, not conversational). This LLM call belongs to a future planner brief (likely scoped alongside or before the Campaign Creation Interface brief)
+  - Deliverables, compliance summary, timeline estimate as a resume — NOT a redundant copy of creator cards, but a synthesized summary
+- **CTA:** "Continue to checkout" or equivalent commitment-intent framing. The CTA must signal commitment without being salesy
+- **User action:** click "Continue to checkout" → triggers Stage A4 authentication
+- **Backend data dependencies:** selected creator IDs, brand record, Brief 11 scoring metadata, LLM call to planner producing performance projection
+- **State management:** a draft Deal record is created in Airtable with `status: CART_DRAFT` when the brand enters Stage A3. This is necessary because:
+  - The brand may authenticate on a different device than they cart-built on
+  - Magic-link auth (Stage A4) requires the cart to survive the auth roundtrip
+  - Operator visibility into "carts in flight" is itself useful (abandoned-cart retention signal)
+- **Draft Deal record carries:** selected creator IDs, working `compliance_spec` (in flux, may be modified before payment), brand association (anonymous via `cart_token` until auth completes, then linked to authenticated brand), pricing estimate, status `CART_DRAFT`
+- **What's NOT here:** authentication, payment, locked spec, contracts. The spec is in flux; nothing irreversible has happened
+
+**Stage A4 — Authentication**
+
+- **Trigger:** ONLY by the Stage A3 "Continue to checkout" CTA. Authentication is never the first surface; it is triggered by commitment intent
+- **Authentication state:** transitions from unauthenticated to authenticated during this stage
+- **Method:** magic-link email (preferred). The brand enters their email, receives a magic-link email, clicks the link, lands authenticated
+- **Framing discipline:** the framing is "unlock my deal" — NOT "sign up for a platform." This is load-bearing for the strategic product positioning. The brand does not experience this as creating an account; they experience it as confirming identity to proceed with a transaction
+- **Profile fields:** brand profile information (brand name, profile picture, team members) is deferred to post-auth dashboard settings. Stage A4 collects only what is needed to authenticate (email)
+- **Backend data dependencies:** magic-link generation, email delivery via SendGrid, session creation on link click
+- **State management:** the CART_DRAFT record from Stage A3 is associated with the newly-authenticated brand record on auth completion
+- **What's NOT here:** payment processing, profile completion, onboarding tutorials. Stage A4 is identity confirmation only
+
+**Stage A5 — Checkout**
+
+This is where money happens. Payment IS lock per Brief 14's architecture.
+
+- **Authentication state:** authenticated
+- **Purpose:** Stripe payment surface; payment confirms commitment and triggers the Brief 14 lock pipeline
+- **What the brand sees:**
+  - Invoice / payment breakdown
+  - Selected creators (reference, not editable)
+  - Payment method selection (Stripe-hosted; brokerage does not handle card data directly per §0.2 safety doctrine)
+  - "Confirm & Pay" CTA
+- **User action:** click "Confirm & Pay" → Stripe processes payment → `payment_intent.succeeded` webhook fires
+- **Backend data dependencies:** CART_DRAFT record with locked spec, Stripe PaymentIntent creation with `metadata.deal_id` set to the CART_DRAFT's deal_id
+- **Critical: `metadata.deal_id` must be set at PaymentIntent creation.** Brief 14 detects missing metadata and fails loud per Pin 1 (UnresolvedPayments table + operator alert). Brief 15b owns ensuring metadata is set
+- **State transition:** payment succeeds → Stripe webhook → Brief 14 lock pipeline → `validateLockedSpec()` → `status: LOCKED` → `creator_payout_schedule` initialized → `generateContracts(dealId)` → `status: CONTRACTS_SENT`
+- **What's NOT here:** spec modification (the spec is now frozen by lock), creator re-selection (the deal is committed)
+
+**Stage A6 — Dashboard (first time)**
+
+- **Authentication state:** authenticated
+- **Purpose:** brand transitions from acquisition layer to product layer (§0.5.A). The first-time dashboard landing is the moment the brand enters the product
+- **What the brand sees:** the full brand dashboard (described in detail under §4.7 returning-brand flow Stage P1, since the dashboard is the same for first-time and returning brands — the only difference is the data it renders). For first-time landing, the dashboard shows:
+  - The just-locked Deal in CONTRACTS_SENT state (awaiting brand+creator signatures)
+  - The compliance_spec from the lock (read-only, immutable per Decision A)
+  - The process-ownership funnel (Decision E) showing current state: contracts sent, awaiting signatures
+  - Empty or initial state for: spending tracker (zero spend until contracts execute and invoices fire), invoices tab (first invoice will arrive after contract signing), reporting tab
+  - Lara available via Escalation tab for any deal-state questions
+- **Backend data dependencies:** the locked Deal record, ComplianceEvents (initially the lock event), creator_payout_schedule (initialized at lock with 80/20 split amounts, all flags false)
+- **Critical UX moment:** the first time landing happens immediately after payment confirmation. The brand sees their deal already in progress — system is triggered on their side. They are now in the product. The Ramp-style UI patterns described in §4.7 govern the visual direction
+- **What's NOT here:** the Kanban (acquisition surface), the Selection Cart (pre-lock surface), the onboarding video. Returning to the brand dashboard does not re-trigger Stage A1-A5
+
+**Stage A6 transitions seamlessly to ongoing product use (§4.7). The acquisition flow is one-time per brand; from this point forward the brand interacts with the product layer.**
+
+**Cross-references:**
+- The CART_DRAFT state machine entry: §4.4
+- The lock pipeline implementation: §5.5 Brief 14 row + `compliance_engine.js` + `server.js` payment_intent.succeeded handler
+- Pin 1 UnresolvedPayments operator recovery: §6 Pin 1 operational infrastructure
+- The compliance_spec JSON schema: `docs/compliance_spec_schema.md`
+- Decision B portal architecture: §2.4
+- Decision E process-ownership funnel: §2.7
+
+### 4.7 Returning-Brand Continuous Campaign Lifecycle (locked 2026-06-12 supplement)
+
+This section describes how a brand interacts with the system for every subsequent campaign after their first deal. The acquisition flow (§4.6) is one-time; the continuous flow is the product the brand uses repeatedly.
+
+**Core architectural distinction:** the Kanban-and-creator-cards in §4.6 Stages A1-A3 is acquisition machinery. The dashboard described here is the product. Returning brands do NOT re-enter through outreach → Kanban → cart. They log into the dashboard and launch a new campaign from inside.
+
+This distinction matters because:
+- The first-deal lifecycle and subsequent-deal lifecycle have different upstream paths to lock
+- Brief 14's lock pipeline must handle both paths identically once Stripe payment confirms
+- Frontend engineering must NOT build the Kanban as the entry point for returning brands
+
+This section is canonical for Brief 15b (brand dashboard rebuild) and the future Campaign Creation Interface brief (post-Brief 16).
+
+**Stage P1 — Dashboard Landing**
+
+- **Authentication state:** authenticated (brand is returning, already has an account)
+- **Purpose:** the brand's home base in the product. All deals, campaigns, communications, spending data accessible from here
+- **Dashboard surfaces (full inventory):**
+
+  The brand dashboard contains all of the following tabs/surfaces. Visual direction is Ramp template — direct borrowing of UI patterns:
+
+  - **Contract Executed tracking:** high-level state badges per deal, click-through to PandaDoc signed PDFs. Shows "Contract sent to creator, awaiting signature" → "Both parties signed" → "Active." This is NOT the full ComplianceEvents audit log; it is a state summary with deep-link to the signed contract.
+
+  - **Compliance Monitoring:** high-level status per deal ("On track" / "Flag raised — under review" / "Resolved"). NOT the full ComplianceEvents trace — that's operator-facing. Brands see status, not the audit log.
+
+  - **Payment Protected:** live "80% released on [date]" / "20% held under compliance review through [date]" view per deal. Forecasting/tracking-style UI showing funds in transit. This is the visible enforcement function from Decision E — hiding it would erode the strategic value premise. The brand should see the money is held; the fact that money is held is the proof the system is working.
+
+  - **Escalation Available (with Lara):** a dedicated tab containing:
+    - The locked compliance_spec resume for each active deal
+    - Compliance window status (where in the 90-day window each campaign sits)
+    - Conditions and current state
+    - Lara — the natural-language interface for deal-state queries (see Lara definition below in this section)
+
+  - **Documents:** Ramp Bills-style view of contracts, invoices, payment receipts. Each document is a card with status, date, click-through to the PandaDoc or Stripe-hosted document.
+
+  - **Email threads:** Gmail-style view of brokerage ↔ brand communications, scoped per deal. Reads from the SendGrid inbound parse data + outreach send history.
+
+  - **Reporting / Spending tracker:** Ramp Reporting-style view. Total spent with brokerage, by deal, by creator, by month. Financial summary.
+
+  - **Invoices:** Ramp Bills-style management with Stripe payment links. Each invoice is a card showing amount, due date, payment status, "Pay" button that opens Stripe-hosted payment page.
+
+  - **Launch Campaign:** entry to Stages P2-P5 (the Campaign Creation Interface). This is how returning brands initiate new campaigns. NOT a "browse creators" button — it is a "start a new campaign" button.
+
+  - **Settings:** brand profile (set post-acquisition since profile fields were deferred in Stage A4), payment methods, team management, notification preferences.
+
+  - **Possibly future: New Matches tab.** Retention surface where new curated creators are surfaced on cadence. Scope and trigger TBD — likely a separate retention engine brief, post-Brief 16.
+
+- **Backend data dependencies:** brand record, all Deal records for this brand, ComplianceEvents (derived to status, not raw), creator_payout_schedule per deal, OutreachDrafts (for email threads), Stripe invoice data, brand settings
+- **What's NOT here:** Kanban, creator cards as the entry point, Selection Cart, acquisition flow surfaces
+
+**Stage P2 — New Campaign Trigger**
+
+- **Trigger:** brand clicks "Launch Campaign" from the dashboard (P1)
+- **What happens:** the Campaign Creation Interface opens (Stage P3)
+- **State management:** no Deal record created yet — the Campaign Creation Interface Mode 1 produces a brief that may or may not become a Deal depending on Stage P5 approval
+
+**Stage P3 — Campaign Creation Interface, Mode 1 (Structured Intake)**
+
+This is the planner-side product surface for returning brands. It is structurally a planner per §0.5.1 — produces structured outputs that feed into the executor pipeline (Brief 10 matching + Brief 11 scoring + Brief 12 outreach generation).
+
+**Mode 1 architecture:**
+- Looks like chat; behaves like a guided form
+- Brand provides:
+  - Campaign objectives
+  - Budget
+  - Audience definition
+  - Constraints (timing, exclusivity asks, platform preferences)
+  - Optional assets (PDFs, briefs, prior creative)
+- LLM produces:
+  - Creator recommendations (drawn from the curated roster, matched and scored against the campaign brief — same Brief 10/11 pipeline as outreach-side)
+  - Performance projection (paragraph-length structured projection of expected campaign performance)
+- **Token-bounded:** known cost ceiling per intake. Same discipline as Brief 9b outreach engine — 5-6 link cap on web search if used, max_tokens cap on LLM call
+- **Single-pass output:** Mode 1 produces a complete recommendation set in one LLM call. No back-and-forth dialogue at this stage. Conversational refinement happens in Mode 2 (Stage P4)
+- **Planner discipline (§0.5.1):** Mode 1 reads from Airtable (creator roster), augments with LLM reasoning, outputs structured recommendations. Mode 1 does NOT write to Airtable. Mode 1 does NOT trigger state changes. Mode 1's output is a planner artifact that the brand reviews
+
+**Output structure (the brief):**
+- Campaign brief object (objectives, budget, audience, constraints)
+- Ranked creator recommendations with brand-facing rationale
+- Performance projection narrative
+- Estimated pricing range
+
+This output feeds into Stage P4 (Mode 2 conversation) and Stage P5 (approval).
+
+**Stage P4 — Campaign Creation Interface, Mode 2 (Contextual Conversation)**
+
+After Mode 1 produces recommendations and projection, the brand can continue querying the system about that specific campaign. Mode 2 is a separate LLM instance with different scope.
+
+**Mode 2 architecture:**
+- Open-source LLM (different instance from Lara — different scope, different access boundary)
+- Conversational — brand can ask multiple questions, refine understanding, explore scenarios
+- **Read access scoped to:**
+  - The campaign's brief (from Mode 1)
+  - The recommendations produced by Mode 1
+  - The creator data underlying the recommendations
+- **Read access NOT granted to:**
+  - The full Airtable
+  - Other brands' campaigns
+  - Historical performance data outside this campaign's recommendation set
+- **Critical: Mode 2 does NOT modify the campaign autonomously.** Read-only at the API layer. Mode 2 is a thinking partner, not an agent. Brand drives all decisions. Mode 2 cannot:
+  - Write to Airtable
+  - Trigger state changes
+  - Invoke executor functions
+  - Modify recommendations (it can suggest modifications; brand approves; planner Mode 1 may re-run on brand request)
+- **Example brand queries:**
+  - "What if I pushed the budget to $30K instead of $20K?"
+  - "What platforms underperform for this audience demographic?"
+  - "How would adding a fourth creator change the projection?"
+  - "What's the breakdown of the projection — what's driving the reach estimate?"
+
+**Token discipline (to be defined precisely in the future Campaign Creation Interface brief):**
+- Token caps per Mode 2 session
+- Context boundary enforcement (Mode 2 cannot reach beyond the campaign's data scope)
+- Read-only enforcement at the API layer (not just at the prompt level)
+
+**Planner discipline (§0.5.1):** Mode 2 is planner-shaped, not executor-shaped. It provides contextual insight. The brand's decisions and actions in the dashboard are what move state forward. Mode 2 informs; the brand executes (with the executor pipeline doing the actual state mutation).
+
+**Stage P5 — Approval**
+
+- **What happens:** brand reviews recommendations (potentially refined through Mode 2 conversation), approves the campaign
+- **State transition:** approval creates a Deal record with `status: CAMPAIGN_APPROVED`. The working compliance_spec from the planner output is attached to the Deal record but not yet locked (CAMPAIGN_APPROVED is pre-lock state)
+- **Pricing finalization:** at approval, the precise rates per creator are finalized. The pricing estimate from Mode 1 becomes a committed pricing structure
+- **What this state means:** the brand has committed to the campaign shape and the creator selection. The deal has not yet been paid for; spec is not yet locked; contracts have not yet generated
+
+**Stage P6 — In-Dashboard Checkout**
+
+This is the continuous-flow analog to Stage A5 (acquisition checkout). The brand pays inside the dashboard rather than on a separate checkout page.
+
+- **Surface:** Stripe payment surface embedded in the dashboard
+- **What the brand sees:** invoice, selected creators (reference, not editable), payment method, "Confirm & Pay" CTA
+- **Critical: `metadata.deal_id` must be set on the PaymentIntent at creation,** same requirement as Stage A5. The Brief 14 lock pipeline detects missing metadata and fails loud per Pin 1.
+- **State transition:** payment succeeds → Stripe webhook → Brief 14 lock pipeline → `validateLockedSpec()` → `status: LOCKED` (transitioned from CAMPAIGN_APPROVED) → `creator_payout_schedule` initialized → `generateContracts(dealId)` → `status: CONTRACTS_SENT`
+- **Same lock pipeline as Stage A5.** The dual-path lock pipeline handles both `CART_DRAFT → LOCKED` (acquisition) and `CAMPAIGN_APPROVED → LOCKED` (continuous) identically. The pre-lock state is metadata about which flow produced the deal; the lock pipeline behavior is path-agnostic
+
+**Stage P7 — Campaign Live in Dashboard**
+
+- **What the brand sees:** the post-lock experience is identical to Stage A6 (first-time dashboard landing) — the dashboard surfaces described in P1 now reflect this new campaign alongside any previous campaigns
+- **All Brief 14 functionality applies:** compliance engine derives status from events; 80/20 payout split fires on delivery approval; day-30 release dashboard math + operator confirmation; Lara provides natural-language access to deal state; UnresolvedPayments handles any payment-with-missing-metadata recovery
+- **The brand returns to P1** for ongoing dashboard use, with this new campaign now appearing alongside historical campaigns
+
+**Lara — natural-language interface scope (locked):**
+
+Lara lives in the Escalation Available tab (P1 dashboard surface). Sharp definition:
+
+- **NOT an AI agent.** Doesn't act autonomously
+- **NOT a chatbot for general conversation.** Doesn't engage in open-ended dialogue
+- **NOT a reasoning layer over business strategy.** Doesn't interpret deal logic, doesn't reconstruct context outside the immediate query, doesn't make decisions
+- **IS a natural-language interface to backend functions.** Routing layer over the read endpoints (`GET /api/deals/:dealId/compliance-status`, `/payout-schedule`, `/compliance-events`, `/compliance-spec`) and the escalation trigger
+- **IS SLA-bound for escalation.** When Lara cannot resolve via read functions and escalation is needed, she triggers human escalation per Decision C (Mon-Fri 7:30am-8pm EDT). When escalation fires, the operator joins the same thread from the operator dashboard and responds inline. Communication stays inside the dashboard channel, NOT via email
+
+**Lara workflow example:**
+- Brand opens Escalation Available tab, types "What's the status of my deal with Creator X?"
+- Lara interprets intent: deal-state query
+- Lara calls `GET /api/deals/:dealId/compliance-status` (after disambiguating which deal via clarifying question if needed)
+- Lara returns the natural-language answer: "Your campaign with Creator X is currently in compliance window day 12 of 30. Delivery was approved on [date]. 80% of payout was released to the creator on [date]. The 20% compliance hold releases on [date 18 days from now] assuming no issues are flagged."
+- If the brand follows up with "I'm having an issue with this deal," Lara routes to escalation: creates an escalation record, notifies the operator, opens the dashboard channel for operator response
+
+**Lara is NOT the Mode 2 LLM** (the Campaign Creation Interface Mode 2). They are two separate LLM instances with separate scopes:
+- Lara: SLA escalation channel, dashboard-wide deal-state queries, can trigger human escalation, scope is all of the brand's deals
+- Mode 2 LLM: scoped to a single campaign's planner output during the Campaign Creation Interface session, read-only insights for campaign decision-making, no escalation capability, session ends when the campaign is approved or abandoned
+
+Different briefs build them. Lara is Brief 15d. Mode 2 is the future Campaign Creation Interface brief.
+
+**Cross-references:**
+- CAMPAIGN_DRAFT and CAMPAIGN_APPROVED state machine entries: §4.4
+- Lock pipeline: §5.5 Brief 14 row
+- Planner/executor doctrine: §0.5.1
+- Process-ownership funnel surfaced in Payment Protected: §2.7
+- Compliance engine: §3.2 compliance_engine.js
+
+### 4.8 Creator-Side Lifecycle (locked 2026-06-12 supplement)
+
+Creators have their own dashboard. Minimal scope by design — the creator's interaction with the system is workflow-tool shaped, not relationship-management shaped (§0.5.A product surface discipline). Three tabs.
+
+This section is canonical for Brief 15c (creator portal full build) and Brief 16 (4-mock test exercising deliverable upload through approval and payout).
+
+**Creator dashboard surfaces (three tabs):**
+
+- **Invoices:** payouts received, pending, scheduled. Each invoice is a card showing amount, related Deal, status, date. Click-through to Stripe receipt for completed payouts. Pending payouts show why they're pending (awaiting delivery approval, in 20% hold window, etc.)
+
+- **Contracts:** signed contracts list. Click-through to PandaDoc PDFs of signed contracts. Shows current contract state per Deal (sent, signed by brand, signed by creator, both-signed/active)
+
+- **Active deals:** the main working surface. Per active deal:
+  - Locked compliance_spec resume (what the creator agreed to deliver)
+  - Deliverable upload surface (the primary creator action)
+  - Compliance window status (where in the 90-day window the deal sits)
+  - 80/20 payout tracking (80% pending delivery approval / 80% released on [date] / 20% in compliance hold through [date] / 20% released on [date])
+  - `roster_eligibility` status (active / under review / flagged)
+
+**Deliverable upload flow (the load-bearing creator action):**
+
+When the creator uploads a deliverable (video, stream clip, post proof), the workflow is:
+
+1. **Creator uploads file** through their dashboard Active Deals tab
+2. **File stored** as Airtable Attachment on a new ComplianceEvents row with:
+   - `event_type: deliverable_uploaded`
+   - `event_attachment: <uploaded file>`
+   - `event_source: creator_portal`
+   - `event_payload`: JSON with platform/format metadata
+3. **Compliance engine derives** new status (`delivery_uploaded` condition now true; evaluates timeline against `compliance_spec.timeline.delivery_due_date`)
+4. **Brand dashboard surfaces the deliverable** in the campaign timeline / Documents tab — brand sees that delivery has been submitted
+5. **Brand reviews** the deliverable:
+   - **If approved:** brand creates `event_type: brand_approval` ComplianceEvent → `deriveDealState()` recomputes → payment_handler.js triggers `release80Percent()` → 80% transfers via Stripe → ComplianceEvents row created for `payment_released_80` → `creator_payout_schedule` updates → status transitions to `DELIVERY_APPROVED` then `CAMPAIGN_LIVE` (creator's content goes live)
+   - **If rejected:** brand creates `event_type: delivery_rejected` ComplianceEvent with rejection reason → `deriveDealState()` flags the breach → status flips to `BREACH_FLAGGED` → operator notified → resolution path per §2.3 (Decision A) credit-and-replacement or per §2.6 (Decision D) creator roster flagging
+
+6. **Compliance window opens** (day 0 = brand approval timestamp). For the next 30 days, content must remain posted per §2.6
+7. **Day-30 release:** operator-confirmed dashboard release per §5.5 Brief 14 Q2 — operator clicks "Release 20% hold" on the dashboard day-30 queue → `release20Percent()` fires → 20% transfers via Stripe → ComplianceEvents row created for `payment_released_20` → `creator_payout_schedule` updates → status transitions to `PAYOUT_20_RELEASED`
+8. **Day-90 close:** content must remain live through day 90 per §2.6. At day 90, the deal transitions to `CAMPAIGN_COMPLETE`. If content was removed between day 30 and day 90, `roster_eligibility` flips to `flagged_breach` per §2.6 (Decision D) — no cash recovery (the 20% has already released), but future-opportunity revocation enforces
+
+**Critical doctrine: deliverables are state transitions in the campaign lifecycle, not a separate product.**
+
+The deliverable upload IS the event. The ComplianceEvents row IS what the compliance engine derives against. The system does NOT judge deliverable quality automatically; the brand judges via approval/rejection; the system tracks that the brand judged. This is the same separation-of-concerns as the planner/executor doctrine (§0.5.1) — the system provides structured workflow; humans make subjective judgments at the gate points.
+
+This means Brief 15c (creator portal) does NOT need any quality-evaluation logic. The creator's role is: upload deliverable per the locked compliance_spec. The brand's role is: review and approve or reject. The system's role is: route the artifacts and derive state.
+
+**Compliance status visibility for creators:**
+
+The creator sees their own deal's compliance status in the Active Deals tab. This is the creator-side mirror of Decision E (process-ownership funnel) — the creator sees the same execution structure the brand sees, from their side. Specifically:
+- Locked compliance_spec (what they agreed to deliver)
+- Current state (delivery pending / delivery uploaded / brand approved / in 20% hold / payout complete / campaign complete)
+- 80/20 payout schedule (when funds release)
+- `roster_eligibility` status (active = good standing; under_review = something has been flagged; flagged_breach = breach recorded, future deal flow at risk)
+
+This visibility is structurally required (per the 2026-05-30 strategic closure) — the guarantee model cannot function if the creator side does not see the execution structure the brand side sees.
+
+**What the creator does NOT see:**
+- The brand's full dashboard (compliance monitoring details from the brand's view, brand-side spending tracker, brand-side reporting)
+- Other creators' deals or roster status
+- The internal placement-status registry (operator-facing surface in Brief 15)
+- Operator-facing audit logs or escalation events from the brand side
+
+**Backend data dependencies:**
+- Creator's authentication (separate auth flow from brand — Brief 15c specifies)
+- Creator record + linked Deals
+- ComplianceEvents scoped to the creator's deals
+- `creator_payout_schedule` per deal
+- `roster_eligibility` from creator record
+- PandaDoc creator-side contract URLs
+
+**File storage architecture:**
+
+Airtable Attachment field on ComplianceEvents is the chosen pattern for deliverable file storage (per Brief 14 schema). Airtable handles upload, stores files, provides URLs. No new infrastructure. The compliance engine reads attachment metadata (file presence, file type, upload timestamp) but does NOT process file contents — content judgment is the brand's via approval/rejection.
+
+If file size or storage cost becomes a problem at scale, migration to external storage (S3) is a future concern. Not a Brief 14 or Brief 15c concern.
+
+**Cross-references:**
+- ComplianceEvents schema: §4.1
+- 80/20 payout per Decision D: §2.6
+- Decision A credit-and-replacement remediation: §2.3
+- compliance_engine.js: §3.2
+- payment_handler.js release functions: §5.5 Brief 14 row
+- Creator portal full build scope: §5.5 Brief 15c row
 
 ---
 
@@ -523,7 +995,7 @@ The 2026-05-29 audit confirmed the downstream intelligence layer is **NET-NEW** 
 | **11** | Antigravity | **Scoring** — deterministic hybrid. **Layer 1 (curation floor):** computed from placement_history completions/breaches/recency-bonus + delivery_reliability_evidence content+recency (0-3 tier scale). Normalized 0-100 against the eligible roster. **Floor = 50** — below excluded with reason `curation_floor`. Tunable constants at file head. **Layer 2 (brand-fit multiplier):** preferred_audience_scale (bucket match), target_budget (rate-band overlap), preferred_platform (channel_url heuristic). Multiplier in `[0.6, 1.4]`; brand with no Layer 2 fields = 1.0 neutral. **finalScore = layer1 × multiplier.** Curation is gate, brand-fit is sort. Top-20 default, ties by record ID. Pure function: `scoreMatches(matchResult, brand, options) → { scoredMatches, rejected, flags, scoringMetadata }`. `withdrawn_pre_delivery` counted in metadata but neutral on score (option i — tunable when data exists). Delta tests verify causal structure with finally-block cleanup discipline. | DONE 2026-06-07 |
 | **12** | Antigravity | **Production outreach orchestration** — batch generation + operator-triggered send. **DONE 2026-06-08.** Two files: `outreach_orchestration.js` (`runOutreachBatchForBrand(brandId, options)` orchestrating matchCreatorsForBrand → scoreMatches → generateOutreachDraft → persist to OutreachDrafts as pending_review; per-creator generation failures accumulate in `errors` array without halting batch) + `outreach_send.js` (`sendOutreachDraft(draftId)` status-checking pending_review load-bearing double-send protection, reads brand.contact_email, fires via `notifications.js` sendOutreachEmail, persists state transition on success or send_failure_count increment on failure). **No cross-module imports** — OutreachDrafts table is the integration contract (verified by grep). Two server routes: `POST /api/outreach/batch` + `POST /api/outreach/send/:draftId`. `notifications.js` created (new util — SendGrid REST v3, SENDGRID_OUTREACH_FROM_EMAIL env var, returns messageId from x-message-id header). Deleted `brand_outreach.js` + `influencer_outreach.js` (via git rm), resolving `[AUDIT 🟡 #11]` (nichesData.niches crash — file removed). `outreachDraftsTable` export added to `airtable.js`. Verification: 5-step e2e (batch → persist → send → state transition → double-send rejection) against live Airtable + real SendGrid; 1 draft created for Nate Herkelman with sendgridMessageId captured; cleanup deleted test draft. **Locked 2026-06-08:** `outreach_orchestration.js` + `outreach_send.js` + `notifications.js` (new) + route additions to `server.js` + `airtable.js` (outreachDraftsTable export) + brand_outreach/influencer_outreach deleted. | DONE 2026-06-08 |
 | **13** | Antigravity | **Reply → classify → negotiate** — `negotiation_handler.js` extended (~330 lines). System prompt extracted to `src/prompts/negotiation_system.md` (5-label taxonomy, 5 few-shots, deal-range awareness, two new RED triggers). `src/lib/email_headers.js` created (pure header parse utility). `classifyAndExtract` replaced by `chatCompletion()` tool-use (Q5=migrate — text-output-based JSON.parse eliminated). Three-tier reply-to-draft matching: In-Reply-To → References → most-recent-sender. Deal-range context fetched from matched draft. `writeReplyCorrelationToDraft` single write path. `server.js` wired for header extraction and object-parameter call site. 8-step e2e all pass. | DONE 2026-06-10 |
-| **14** | Antigravity | **Match-lock → contract handoff** — **DONE 2026-06-12** — wire new engine's `DEAL_LOCKED` output into the contract/Stripe/payout spine. Stripe `payment_intent.succeeded` triggers the lock pipeline: `validateLockedSpec()` → status `LOCKED` → `creator_payout_schedule` initialized → `generateContracts(dealId)` (dealId-targeted, compliance_spec merge tokens, doc IDs written to Deal) → status `CONTRACTS_SENT`. PandaDoc webhook extended: `document.completed` writes `contract_signed_brand` or `contract_signed_creator` ComplianceEvent; both-signed check → `CONTRACTS_SIGNED`. Legacy batch-poll path preserved with [K.6 CLEANUP CANDIDATE] annotation. 80/20 payout split: `release80Percent()` fires on brand approval (DELIVERY_APPROVED → operator-triggered); `release20Percent()` gated by `checkDay30Eligibility()` (day-30 elapsed + no active breach flags + 80% already released). **Pin 1 UnresolvedPayments:** `payment_intent.succeeded` without `deal_id` metadata fails loud with dual-surface recovery (UnresolvedPayments Airtable record + operator alert email). New endpoints: `POST /api/deals/:dealId/release-20-percent`, `GET /api/deals/:dealId/compliance-status`, `GET /api/deals/:dealId/payout-schedule`, `GET /api/deals/:dealId/compliance-events`, `GET /api/deals/:dealId/compliance-spec`, `GET /api/unresolved-payments`. Operator schema migrations required: create ComplianceEvents (10 fields) + UnresolvedPayments (7 fields) + add `pandadoc_brand_document_id` + `pandadoc_creator_document_id` to Deals. Verify: `node scripts/verify_brief14_schema.mjs`. Integration contracts: `docs/compliance_spec_schema.md`, `docs/pandadoc_merge_tokens.md`. | DONE 2026-06-12 |
+| **14** | Antigravity | **Match-lock → contract handoff** — **DONE 2026-06-12** — wire new engine's `DEAL_LOCKED` output into the contract/Stripe/payout spine. Stripe `payment_intent.succeeded` triggers the lock pipeline: `validateLockedSpec()` → status `LOCKED` → `creator_payout_schedule` initialized → `generateContracts(dealId)` (dealId-targeted, compliance_spec merge tokens, doc IDs written to Deal) → status `CONTRACTS_SENT`. PandaDoc webhook extended: `document.completed` writes `contract_signed_brand` or `contract_signed_creator` ComplianceEvent; both-signed check → `CONTRACTS_SIGNED`. Legacy batch-poll path preserved with [K.6 CLEANUP CANDIDATE] annotation. 80/20 payout split: `release80Percent()` fires on brand approval (DELIVERY_APPROVED → operator-triggered); `release20Percent()` gated by `checkDay30Eligibility()` (day-30 elapsed + no active breach flags + 80% already released). **Pin 1 UnresolvedPayments:** `payment_intent.succeeded` without `deal_id` metadata fails loud with dual-surface recovery (UnresolvedPayments Airtable record + operator alert email). New endpoints: `POST /api/deals/:dealId/release-20-percent`, `GET /api/deals/:dealId/compliance-status`, `GET /api/deals/:dealId/payout-schedule`, `GET /api/deals/:dealId/compliance-events`, `GET /api/deals/:dealId/compliance-spec`, `GET /api/unresolved-payments`. Operator schema migrations required: create ComplianceEvents (10 fields) + UnresolvedPayments (7 fields) + add `pandadoc_brand_document_id` + `pandadoc_creator_document_id` to Deals. Verify: `node scripts/verify_brief14_schema.mjs`. Integration contracts: `docs/compliance_spec_schema.md`, `docs/pandadoc_merge_tokens.md`. **Dual-path pre-lock support (Brief 14-supplement):** the lock pipeline handles both `CART_DRAFT → LOCKED` (acquisition flow, §4.6 Stage A5) and `CAMPAIGN_APPROVED → LOCKED` (continuous flow, §4.7 Stage P6) identically — path-agnostic by design. `isPostLockStatus()` and `handleStripePaymentSucceeded()` in server.js treat both pre-lock states as valid inputs; the resulting LOCKED state and downstream pipeline are identical for both paths. | DONE 2026-06-12 |
 | **15** | Antigravity | **Operator dashboard rebuild.** Replaces `dashboard/app.js` + `dashboard/index.html` wholesale. Lead state board, `DEAL_INITIATED → DEAL_LOCKED` approval gate, outreach draft review/edit/send panel (operator-confirmation sanitization layer), YELLOW/RED `inbound_flag` surfacing, roster interactions, revenue, pipeline health, bounce/invalid tracking. **EXTENDED 2026-05-30 scope:** `compliance_status` view per deal (each condition with timestamp evidence), `escalation_events` view per deal, `roster_eligibility` management UI + internal placement-status registry view, escalation response time as first-class metric (§0.6.2). Resolves `[AUDIT 🟠 #5]` (stub handlers), `[AUDIT 🟡 #14]` (niche colors), `[AUDIT 🟠 #8]` (`follow_up_engine.js` bug surfacing), `[AUDIT 🟡 #10]` (flat-15% vs `pricing.json` — pick flat-15% as intentional or consume pricing.json, apply across `payment_handler.js` + portal markup). Decision in brief: `escalation_flag` stays in `tracker.js` ephemeral OR promoted to Airtable field `[AUDIT 🟠 #7]`. | EXTENDED 2026-05-30 |
 | **15b** | Antigravity | **NEW: Brand portal full build.** Replaces `views/roster.html` scaffolding. **First screen = deal framework summary** (Decision B): deliverables, rate, what's guaranteed (compliance_spec summary), what happens on compliance failure (credit-and-replacement, plain-English link), what's not guaranteed (views/algorithm — stated plainly), escalation availability, **process-ownership funnel (Decision E)**. Second screen = curated creator cards (each card with external proof + compliance underwriting evidence). Third screen = selection → deal lock handoff. Persistent escalation panel and process-ownership funnel visible across screens during active campaign. Signed-URL access with expiry. Post-campaign view shows completion record. **Cross-brief coupling — load-bearing:** Brief 15b and Brief 14 share a single source of truth (`compliance_spec` JSON on Deal) and CANNOT drift. Portal rendering and PandaDoc contract terms must say the same thing in the same structure. Coordinate at implementation time even though briefs are non-adjacent in sequence. Equivalence enforced in Brief 16. | NEW |
 | **15c** | Antigravity | **NEW: Creator portal full build.** Mirrors brand portal from supply-side. Creator sees: the `compliance_spec` from their side (what they're committing to deliver, by when, with what verification conditions), the deal framework, the escalation map (from supply side), their 80/20 payout schedule with real-time status, their `roster_eligibility` standing. Same framing discipline (Decision C: institutional posture; Decision D: 20% hold framed as "compliance validation hold (system integrity layer)"). Signed-URL access with expiry. | NEW |
@@ -792,3 +1264,5 @@ Respond ONLY with valid JSON in this exact shape, no preamble, no markdown fenci
 - **2026-06-10** — **Brief 13 done.** Negotiation extension shipped. 5-label taxonomy, tool-use migration, header extraction/matching utility, correlation writes. **Brief 14 unblocked.**
 
 - **2026-06-12** — **Brief 14 done.** Match-lock → contract handoff shipped. 6 files changed, 3 docs added, 1 verification script added. Full compliance object lifecycle (validate → lock → contract → sign → payout) and UnresolvedPayments recovery surface wired. **Brief 15 unblocked.**
+
+- **2026-06-12 (supplement)** — **Brief 14-Supplement done.** Doc-only architectural precision recovery. Five new sections added: §0.5.A (Product Surface Architecture — Layer 1 economic identity vs Layer 2 software-shaped product surface; critical distinction between operator dashboard, brand portal, creator portal, Lara, and future Campaign Creation Interface), §0.5.1 (Planner/Executor Doctrine — architectural rule that planner functions never invoke executor functions and vice versa; forbids LLM-driven autonomous state changes; doctrine implications for all downstream briefs), §4.6 (Brand Experience Stages — Acquisition Flow — 6 stages A1-A6 from outreach click to dashboard landing; CART_DRAFT state, magic-link auth, Stripe checkout, Brief 14 lock trigger; canonical reference for Brief 15b + Brief 16), §4.7 (Returning-Brand Continuous Campaign Lifecycle — 7 stages P1-P7; full brand dashboard tab inventory; Campaign Creation Interface Mode 1 (structured intake, planner) + Mode 2 (contextual conversation, read-only LLM); CAMPAIGN_DRAFT/CAMPAIGN_APPROVED pre-lock states; Stage P6 in-dashboard checkout feeding identical Brief 14 lock pipeline; Lara sharp definition — NOT agent, NOT chatbot, IS natural-language routing surface over read endpoints + escalation; Lara vs Mode 2 LLM distinction), §4.8 (Creator-Side Lifecycle — 3-tab dashboard; deliverable upload flow 8-step walkthrough; brand approval/rejection gate; day-30 and day-90 closure; deliverables-as-state-transitions doctrine; Brief 15c canonical reference). §4.4 Deal state machine corrected: CAMPAIGN_DRAFT and CAMPAIGN_APPROVED added as pre-lock states for continuous path; CANCELLED state added; dual-path pre-lock explained; BREACH_FLAGGED expanded to include delivery_rejected post-lock. §5.5 Brief 14 row updated with dual-path note. No code changes. No schema migrations. Commit: `git add BROKERAGE_OS_LIVING_DOC_f.md && git commit`.
