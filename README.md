@@ -3,18 +3,9 @@
 Internal operating system for influencer-brand sponsorship brokerage.
 
 1. SYSTEM IDENTITY & CURRENT STATE
-What it is: An AI-native enforcement and execution platform for creator deals and marketing campaigns (§0.5). The operator (alamir / GitHub: Donsnizito) runs the system. The platform discovers brands and curates a creator roster, runs intelligence-led outreach, classifies inbound replies via LLM, presents a deal-framework-first portal where the brand self-selects from curated creators or imports their own (BYOC), generates contracts, collects payment ($2K/mo subscription + 3.6% campaign fee), disburses creator payouts under brand-configured enforcement rules, and surfaces compliance and escalation state to both sides during the campaign lifecycle.
-
-Repo: github.com/Donsnizito/influencer-brokerage-os (private) Local path: C:\Users\Shadow\.gemini\antigravity\scratch\influencer-agency Deployment: Render Web Service. Stack: Node.js v18+ (ESM only), Express, Airtable (primary DB), SendGrid (outbound + Inbound Parse), Anthropic Claude Sonnet 4.6 (claude-sonnet-4-6), PandaDoc (contracts), Stripe connect (LIVE mode, invoicing/payments + payment_intent.succeeded lock pipeline).
+What it is: An AI-native enforcement and execution platform for creator deals and marketing campaigns (§0.5). The operator (alamir / GitHub: Donsnizito) runs the system. The platform discovers brands and curates a creator roster, runs intelligence-led outreach, classifies inbound replies via LLM, presents a deal-framework-first portal where the brand self-selects from curated creators or imports their own (BYOC), generates contracts, collects payment, disburses creator payouts under brand-configured enforcement rules, and surfaces compliance and escalation state to both sides during the campaign lifecycle.
 
 Verified-and-running [VERBATIM]: Transactional spine end-to-end — contract generation → signing → invoice → payment → operator payout alert → confirm → CAMPAIGN_LIVE — tested over 14 hours with real PandaDoc contracts, a real Stripe test payment, and a real operator alert email. Committed, deployed, live. The 2026-05-29 threat audit confirms: "the spine is solid: Stripe / PandaDoc / Airtable / SendGrid webhook plumbing, idempotency, contract generation, and payment flow are all correct and commercial-grade."
-
-Where the threats cluster [AUDIT]:
-
-The /api/deals FK-read bug hiding all deal data (Brief 6 — FIXED 2026-05-29).
-The outreach layer has no LLM / draft / operator-gate integration yet (Brief 12 builds).
-The dashboard is a read-only Kanban with stub action handlers (Brief 15 rebuilds).
-Where the strategic gaps cluster (post-2026-05-30): 4. The compliance object replacing view_guarantee does not yet exist in the schema (Brief 7b adds). 5. The brand- and creator-facing surfaces required by Decisions B, C, D, and E do not exist beyond the scaffolded views/roster.html (Briefs 15b/15c/15d build). 6. The AI support + structured escalation interface (Decision C) is net-new and unscoped in the original build sequence (Brief 15d builds).
 
 Current data state: Clean zero baseline (Brief 4 wiped all Influencer/Brand/Deal records; WebhookEvents preserved). Stripe in LIVE mode. [DECISION/history]
 
